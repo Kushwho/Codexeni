@@ -1,0 +1,38 @@
+{
+  "name": "codex-antigravity-bridge",
+  "version": "0.1.0+codex.20260823135920",
+  "description": "Let Codex delegate bounded coding work to an authenticated local Antigravity CLI session.",
+  "author": {
+    "name": "Kushwho",
+    "url": "https://github.com/Kushwho"
+  },
+  "homepage": "https://github.com/Kushwho/codex-antigravity-bridge",
+  "repository": "https://github.com/Kushwho/codex-antigravity-bridge",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "antigravity",
+    "gemini",
+    "mcp",
+    "coding-agent"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex Antigravity Bridge",
+    "shortDescription": "Delegate bounded coding tasks to local Antigravity.",
+    "longDescription": "An unofficial bridge for Codex to orchestrate an authenticated local Antigravity CLI session using Gemini 3.7 Flash. Codex remains responsible for approvals, conflict review, and final verification.",
+    "developerName": "Kushwho",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write",
+      "Execute"
+    ],
+    "defaultPrompt": [
+      "Delegate this bounded coding task to Antigravity.",
+      "Ask Antigravity to review these files, then verify its findings.",
+      "Poll the Antigravity task and summarize changed files."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

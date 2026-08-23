@@ -1,0 +1,50 @@
+name: Bridge CI
+
+on:
+  push:
+    paths:
+      - "plugins/codex-antigravity-bridge/**"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths:
+      - "plugins/codex-antigravity-bridge/**"
+      - ".github/workflows/ci.yml"
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: plugins/codex-antigravity-bridge
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: plugins/codex-antigravity-bridge/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Runtime tests
+        run: pnpm test
+
+      - name: Fixture tests
+        run: pnpm test:fixture

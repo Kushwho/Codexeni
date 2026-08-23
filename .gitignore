@@ -1,0 +1,17 @@
+# Local build and dependency output
+plugins/codex-antigravity-bridge/node_modules/
+plugins/codex-antigravity-bridge/.pnpm-store/
+plugins/codex-antigravity-bridge/*.tsbuildinfo
+
+# Test and runtime artifacts; raw worker logs must stay outside the repository.
+plugins/codex-antigravity-bridge/test-results/
+plugins/codex-antigravity-bridge/coverage/
+plugins/codex-antigravity-bridge/logs/
+*.agy.log
+.tmp/
+
+# Local editor and OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

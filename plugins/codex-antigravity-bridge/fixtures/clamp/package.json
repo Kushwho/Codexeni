@@ -1,0 +1,8 @@
+{
+  "name": "bridge-clamp-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}
