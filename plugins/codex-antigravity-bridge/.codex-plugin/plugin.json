@@ -1,6 +1,6 @@
 {
   "name": "codex-antigravity-bridge",
-  "version": "0.1.0+codex.20260823142906",
+  "version": "0.1.0+codex.20260823144143",
   "description": "Let Codex delegate bounded coding work to an authenticated local Antigravity CLI session.",
   "author": {
     "name": "Kushwho",

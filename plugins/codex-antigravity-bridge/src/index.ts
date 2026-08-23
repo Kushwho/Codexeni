@@ -13,6 +13,7 @@ import { delimiter, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { RootsListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
 export const DEFAULT_MODEL = "gemini-3.7-flash-high";
@@ -29,6 +30,7 @@ export type PermissionMode = "restricted" | "full";
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "timed_out" | "canceled" | "orphaned";
 export type TaskMode = "coding" | "read_only";
 export type ErrorCategory = "rate_limited" | "quota_exhausted" | "session_limit" | "context_limit" | "authentication" | "upstream_error";
+export type AllowedRootSource = "environment" | "mcp_client" | "unconfigured";
 
 export interface BridgeConfig {
   executable: string;
@@ -154,6 +156,44 @@ export async function canonicalizeWorkspace(workspace: string): Promise<string> 
   return realpath(resolve(workspace));
 }
 
+/** Convert a local MCP Root URI to a path. Remote hosts and malformed URIs are never accepted. */
+export function fileUriToLocalPath(uri: string): string | undefined {
+  try {
+    const parsed = new URL(uri);
+    if (parsed.protocol !== "file:" || (parsed.hostname && parsed.hostname !== "localhost")) return undefined;
+    return fileURLToPath(parsed);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Resolve only existing directory roots supplied by an MCP client. Canonical
+ * paths are de-duplicated so URI spelling and symlink aliases cannot widen a
+ * task's effective allowed-root set.
+ */
+export async function canonicalizeMcpClientRoots(uris: readonly string[]): Promise<string[]> {
+  const canonicalRoots: string[] = [];
+  const seen = new Set<string>();
+  for (const uri of uris) {
+    const localPath = fileUriToLocalPath(uri);
+    if (!localPath) continue;
+    try {
+      const canonical = await canonicalizeWorkspace(localPath);
+      if (!(await stat(canonical)).isDirectory()) continue;
+      const key = comparablePath(canonical);
+      if (!seen.has(key)) {
+        seen.add(key);
+        canonicalRoots.push(canonical);
+      }
+    } catch {
+      // A client can send stale or malformed roots. Ignore just that root and
+      // retain the fail-closed result for the remainder.
+    }
+  }
+  return canonicalRoots;
+}
+
 function comparablePath(value: string): string {
   return process.platform === "win32" ? value.toLocaleLowerCase() : value;
 }
@@ -167,7 +207,19 @@ export function isPathWithinRoot(candidate: string, root: string): boolean {
 }
 
 export class WorkspaceGuard {
-  public constructor(private readonly configuredRoots: readonly string[]) {}
+  private configuredRoots: string[];
+
+  public constructor(configuredRoots: readonly string[]) {
+    this.configuredRoots = [...configuredRoots];
+  }
+
+  public setConfiguredRoots(roots: readonly string[]): void {
+    this.configuredRoots = [...roots];
+  }
+
+  public getConfiguredRoots(): readonly string[] {
+    return this.configuredRoots;
+  }
 
   public async canonicalRoots(): Promise<string[]> {
     return Promise.all(this.configuredRoots.map((root) => canonicalizeWorkspace(root)));
@@ -426,6 +478,9 @@ export class AgyBridgeRuntime {
   public readonly config: BridgeConfig;
   public readonly jobs = new Map<string, TaskRecord>();
   public readonly breakers = new Map<string, ModelCircuitBreaker>();
+  private allowedRootSource: AllowedRootSource;
+  private rootRefreshGeneration = 0;
+  private pendingMcpRootDiscovery: Promise<void> = Promise.resolve();
   private readonly guard: WorkspaceGuard;
   private readonly spawnImpl: SpawnFunction;
   private readonly stopChildImpl: StopChildFunction;
@@ -440,6 +495,7 @@ export class AgyBridgeRuntime {
     const provided = dependencies.config ?? resolveBridgeConfig();
     this.config = { ...provided, maxConcurrency: Math.min(Math.max(1, provided.maxConcurrency), DEFAULT_MAX_CONCURRENCY) };
     this.guard = new WorkspaceGuard(this.config.allowedRoots);
+    this.allowedRootSource = this.config.allowedRoots.length > 0 ? "environment" : "unconfigured";
     this.spawnImpl = dependencies.spawnImpl ?? nodeSpawn;
     this.stopChildImpl = dependencies.stopChildImpl ?? stopChildProcess;
     this.now = dependencies.now ?? (() => new Date());
@@ -451,8 +507,9 @@ export class AgyBridgeRuntime {
   }
 
   public async health(): Promise<Record<string, unknown>> {
+    await this.awaitMcpRootDiscovery();
     this.expireBreakers();
-    const canonicalRoots = await Promise.all(this.config.allowedRoots.map(async (root) => {
+    const canonicalRoots = await Promise.all(this.guard.getConfiguredRoots().map(async (root) => {
       try { return { configured: root, canonical: await canonicalizeWorkspace(root) }; }
       catch (error) { return { configured: root, error: error instanceof Error ? error.message : String(error) }; }
     }));
@@ -466,6 +523,7 @@ export class AgyBridgeRuntime {
       version: version.ok ? version.stdout.trim() : undefined,
       authenticationStatus: models.ok ? "authenticated" : version.ok ? "unknown" : "unavailable",
       configuredAllowedRoots: canonicalRoots,
+      allowedRootSource: this.allowedRootSource,
       permissionMode: this.config.permissionMode,
       defaultModel: this.config.defaultModel,
       maxConcurrency: this.config.maxConcurrency,
@@ -477,6 +535,7 @@ export class AgyBridgeRuntime {
   }
 
   public async startTask(input: { task: string; workspace: string; effort?: "low" | "medium" | "high"; timeoutSeconds?: number; model?: string; taskMode?: TaskMode; maxRetries?: number }): Promise<Record<string, unknown>> {
+    await this.awaitMcpRootDiscovery();
     if (!input.task.trim()) throw new Error("Task must not be empty.");
     if (!input.workspace.trim()) throw new Error("Workspace must not be empty.");
     if (input.timeoutSeconds !== undefined && (!Number.isSafeInteger(input.timeoutSeconds) || input.timeoutSeconds <= 0 || input.timeoutSeconds > this.config.defaultTimeoutSeconds)) {
@@ -526,6 +585,48 @@ export class AgyBridgeRuntime {
       record.stderrSummary = error instanceof Error ? error.message : String(error);
     }
     return { jobId: id, status: record.status, warnings: record.warnings, workspace, model: record.model, taskMode: record.taskMode, maxRetries: record.maxRetries };
+  }
+
+  /**
+   * Apply roots advertised by the connected MCP client. Environment roots are
+   * intentionally immutable and take precedence over client-provided roots.
+   */
+  public async adoptMcpClientRoots(uris: readonly string[]): Promise<string[]> {
+    if (this.config.allowedRoots.length > 0) return [...this.config.allowedRoots];
+    const generation = ++this.rootRefreshGeneration;
+    const roots = await canonicalizeMcpClientRoots(uris);
+    if (generation !== this.rootRefreshGeneration) return [...this.guard.getConfiguredRoots()];
+    this.guard.setConfiguredRoots(roots);
+    this.allowedRootSource = roots.length > 0 ? "mcp_client" : "unconfigured";
+    return roots;
+  }
+
+  /** Fail closed when the MCP client cannot provide a current usable root list. */
+  public clearMcpClientRoots(): void {
+    if (this.config.allowedRoots.length > 0) return;
+    this.rootRefreshGeneration += 1;
+    this.guard.setConfiguredRoots([]);
+    this.allowedRootSource = "unconfigured";
+  }
+
+  public getAllowedRootSource(): AllowedRootSource {
+    return this.allowedRootSource;
+  }
+
+  public hasEnvironmentRoots(): boolean {
+    return this.config.allowedRoots.length > 0;
+  }
+
+  /** Used by the MCP adapter so health/task requests cannot race a roots refresh. */
+  public setMcpRootDiscovery(discovery: Promise<unknown>): void {
+    this.pendingMcpRootDiscovery = discovery.then(
+      () => undefined,
+      () => { this.clearMcpClientRoots(); },
+    );
+  }
+
+  public async awaitMcpRootDiscovery(): Promise<void> {
+    await this.pendingMcpRootDiscovery;
   }
 
   public getTask(jobId: string, eventLimit = 50): Record<string, unknown> {
@@ -835,8 +936,37 @@ const taskInput = {
 
 const jsonResult = (payload: unknown, isError = false) => ({ content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }], structuredContent: payload as Record<string, unknown>, isError });
 
+export interface McpRootsProvider {
+  listRoots(): Promise<{ roots: Array<{ uri: string }> }>;
+}
+
+/** Request a fresh standard MCP roots/list response, retaining fail-closed behavior on any error. */
+export async function refreshMcpClientRoots(runtime: AgyBridgeRuntime, client: McpRootsProvider): Promise<string[]> {
+  if (runtime.hasEnvironmentRoots()) return [...runtime.config.allowedRoots];
+  try {
+    const response = await client.listRoots();
+    return await runtime.adoptMcpClientRoots(Array.isArray(response?.roots) ? response.roots.map((root) => root?.uri).filter((uri): uri is string => typeof uri === "string") : []);
+  } catch {
+    runtime.clearMcpClientRoots();
+    return [];
+  }
+}
+
+/** Attach roots discovery only once the MCP initialization handshake has completed. */
+export function configureMcpClientRootDiscovery(server: McpServer, runtime: AgyBridgeRuntime): () => Promise<string[]> {
+  const refresh = () => refreshMcpClientRoots(runtime, server.server);
+  server.server.oninitialized = () => {
+    runtime.setMcpRootDiscovery(refresh());
+  };
+  server.server.setNotificationHandler(RootsListChangedNotificationSchema, () => {
+    runtime.setMcpRootDiscovery(refresh());
+  });
+  return refresh;
+}
+
 export function createMcpServer(runtime = new AgyBridgeRuntime()): McpServer {
   const server = new McpServer({ name: "codex-antigravity-bridge", version: "0.1.0" });
+  configureMcpClientRootDiscovery(server, runtime);
   server.registerTool("antigravity_health", { description: "Check the local Antigravity CLI bridge without reading credentials.", annotations: { readOnlyHint: true, openWorldHint: false } }, async () => jsonResult(await runtime.health()));
   server.registerTool("antigravity_start_task", { description: "Start an asynchronous Antigravity coding or read-only task. Full mode grants broad local tool access; the allowed-root check selects cwd but is not a security sandbox.", inputSchema: taskInput, annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true } }, async (input) => {
     try { return jsonResult(await runtime.startTask(input)); } catch (error) { return jsonResult({ error: error instanceof Error ? error.message : String(error) }, true); }

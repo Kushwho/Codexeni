@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { ListRootsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
 import { createEscapingLink, createFakeSpawn, createManualTimers, makeWorkspace, writeOnSpawn } from "./helpers.mjs";
 
@@ -50,6 +54,113 @@ test("configuration parsing has safe defaults and a bounded concurrency", () => 
   assert.equal(resolved.defaultModel, "gemini-3.7-flash-high");
   assert.equal(resolved.defaultTimeoutSeconds, 900);
   assert.equal(resolved.maxConcurrency, 4);
+});
+
+test("MCP file-root parsing accepts local roots only and handles Windows file URIs", async () => {
+  const { root } = await makeWorkspace();
+  const uri = pathToFileURL(root).href;
+  assert.equal(bridge.fileUriToLocalPath(uri), root);
+  assert.equal(bridge.fileUriToLocalPath("https://example.com/workspace"), undefined);
+  assert.equal(bridge.fileUriToLocalPath("file://remote-host/workspace"), undefined);
+  assert.equal(bridge.fileUriToLocalPath("not a uri"), undefined);
+  const windowsPath = bridge.fileUriToLocalPath("file:///C:/Bridge%20Root");
+  assert.equal(windowsPath, process.platform === "win32" ? "C:\\Bridge Root" : "/C:/Bridge Root");
+
+  const roots = await bridge.canonicalizeMcpClientRoots([
+    uri,
+    uri,
+    uri.replace("file:///", "file://localhost/"),
+    "https://example.com/not-local",
+    "file://remote-host/not-local",
+    "file:///this-path-does-not-exist",
+  ]);
+  assert.deepEqual(roots, [await bridge.canonicalizeWorkspace(root)]);
+});
+
+test("explicit allowed roots override MCP roots; empty and unsupported MCP roots fail closed", async () => {
+  const envWorkspace = await makeWorkspace();
+  const clientWorkspace = await makeWorkspace();
+  const { spawnImpl } = createFakeSpawn([{ close: false }]);
+  const explicitRuntime = new bridge.AgyBridgeRuntime({
+    config: config(envWorkspace.root), spawnImpl, stopChildImpl: stopFakeChild,
+  });
+  assert.deepEqual(await explicitRuntime.adoptMcpClientRoots([pathToFileURL(clientWorkspace.root).href]), [envWorkspace.root]);
+  assert.equal(explicitRuntime.getAllowedRootSource(), "environment");
+  await assert.rejects(
+    () => explicitRuntime.startTask({ task: "outside explicit root", workspace: clientWorkspace.root }),
+    /outside/,
+  );
+  await explicitRuntime.shutdown();
+
+  const unsetRuntime = new bridge.AgyBridgeRuntime({ config: config(envWorkspace.root, { allowedRoots: [] }) });
+  await unsetRuntime.adoptMcpClientRoots(["https://example.com/root", "file://remote-host/root", "file:///missing-root"]);
+  assert.equal(unsetRuntime.getAllowedRootSource(), "unconfigured");
+  await assert.rejects(
+    () => unsetRuntime.startTask({ task: "must fail closed", workspace: envWorkspace.root }),
+    /ALLOWED_ROOTS|required/i,
+  );
+});
+
+test("refreshMcpClientRoots adopts and refreshes dynamic client roots while reporting their source", async () => {
+  const first = await makeWorkspace();
+  const second = await makeWorkspace();
+  let advertised = [pathToFileURL(first.root).href];
+  const { spawnImpl, calls } = createFakeSpawn([
+    { stdout: "agy fixture\n", exitCode: 0 },
+    { stdout: "gemini-3.7-flash-high\n", exitCode: 0 },
+    { close: false },
+  ]);
+  const runtime = new bridge.AgyBridgeRuntime({
+    config: config(first.root, { allowedRoots: [] }), spawnImpl, stopChildImpl: stopFakeChild,
+  });
+  const provider = { listRoots: async () => ({ roots: advertised.map((uri) => ({ uri })) }) };
+  assert.deepEqual(await bridge.refreshMcpClientRoots(runtime, provider), [await bridge.canonicalizeWorkspace(first.root)]);
+  assert.equal(runtime.getAllowedRootSource(), "mcp_client");
+  const health = await runtime.health();
+  assert.equal(health.allowedRootSource, "mcp_client");
+  advertised = [pathToFileURL(second.root).href];
+  await bridge.refreshMcpClientRoots(runtime, provider);
+  await assert.rejects(() => runtime.startTask({ task: "old root", workspace: first.root }), /outside/);
+  const started = await runtime.startTask({ task: "new root", workspace: second.root });
+  assert.equal(started.workspace, await bridge.canonicalizeWorkspace(second.root));
+  await runtime.shutdown();
+  assert.equal(calls.length, 3);
+});
+
+test("MCP roots/list is ready before the first task and roots/list_changed refreshes it", async () => {
+  const first = await makeWorkspace();
+  const second = await makeWorkspace();
+  let advertised = [pathToFileURL(first.root).href];
+  const { spawnImpl, calls } = createFakeSpawn([{ close: false }, { close: false }]);
+  const runtime = new bridge.AgyBridgeRuntime({
+    config: config(first.root, { allowedRoots: [] }), spawnImpl, stopChildImpl: stopFakeChild,
+  });
+  const server = bridge.createMcpServer(runtime);
+  const client = new Client(
+    { name: "bridge-roots-test", version: "1.0.0" },
+    { capabilities: { roots: { listChanged: true } } },
+  );
+  client.setRequestHandler(ListRootsRequestSchema, async () => ({ roots: advertised.map((uri) => ({ uri })) }));
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+
+  // No polling is allowed here: the first task must see the roots returned by
+  // the initialization-time standard roots/list request.
+  const firstTask = await runtime.startTask({ task: "first task", workspace: first.root });
+  assert.equal(firstTask.workspace, await bridge.canonicalizeWorkspace(first.root));
+  assert.equal(runtime.getAllowedRootSource(), "mcp_client");
+  calls[0].child.emit("close", 0, null);
+  await waitFor(() => assert.equal(runtime.getTask(firstTask.jobId).status, "failed"));
+
+  advertised = [pathToFileURL(second.root).href];
+  await client.sendRootsListChanged();
+  await waitFor(() => assert.equal(runtime.getAllowedRootSource(), "mcp_client"));
+  await waitFor(() => assert.rejects(() => runtime.startTask({ task: "stale root", workspace: first.root }), /outside/));
+  const secondTask = await runtime.startTask({ task: "refreshed root", workspace: second.root });
+  assert.equal(secondTask.workspace, await bridge.canonicalizeWorkspace(second.root));
+  await client.close();
+  await server.close();
 });
 
 test("Agy arguments retain hostile task text as one prompt argument", () => {

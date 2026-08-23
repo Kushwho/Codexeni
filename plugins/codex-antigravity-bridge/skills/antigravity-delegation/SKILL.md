@@ -13,9 +13,10 @@ Before delegating:
 
 1. Explain that Antigravity will be used before the first delegation in a turn. The tool approval is the final start gate.
 2. Call `antigravity_health` once per session. Require the `agy` CLI to be available, authenticated through its normal OAuth flow, and to expose the exact requested Gemini 3.7 Flash model. Do not fall back to another model without asking.
-3. Define one small objective with explicit in-scope paths, allowed commands, expected tests, and a stop condition. Ask a follow-up question if the request is broad, ambiguous, security-sensitive, or would touch credentials, production systems, generated lockfiles, or unrelated repositories.
-4. Read all applicable `AGENTS.md` files and include the relevant constraints in the worker prompt. Tell Antigravity to read them too.
-5. Check the current working tree and record the baseline. Do not delegate when there are unreviewed changes that overlap the requested paths unless the user explicitly accepts that risk.
+3. Resolve the allowed workspace roots. If `AGY_BRIDGE_ALLOWED_ROOTS` is set, treat it as the explicit override. Otherwise rely on standard MCP `roots/list` and `roots/list_changed` from the Codex client, accepting only `file://` roots. Use the active Codex workspace plus additional client-supplied roots when available. Never assume `${PLUGIN_ROOT}` or `process.cwd` is a usable root; if no usable roots exist, fail closed and ask the user to set the explicit override.
+4. Define one small objective with explicit in-scope paths, allowed commands, expected tests, and a stop condition. Ask a follow-up question if the request is broad, ambiguous, security-sensitive, or would touch credentials, production systems, generated lockfiles, or unrelated repositories.
+5. Read all applicable `AGENTS.md` files and include the relevant constraints in the worker prompt. Tell Antigravity to read them too.
+6. Check the current working tree and record the baseline. Do not delegate when there are unreviewed changes that overlap the requested paths unless the user explicitly accepts that risk.
 
 ## Choose the task mode
 
@@ -24,6 +25,8 @@ Before delegating:
 - Use `antigravity_start_task` with the default exact model `gemini-3.7-flash-high`, high effort, and a bounded timeout. A start call may edit files or run commands, so obtain the normal Codex/user approval before making it.
 
 The bridge permits up to four concurrent jobs locally. This is a local ceiling, not a published Antigravity concurrency quota. Never schedule simultaneous writers for the same workspace; their changes are unsafe to overlap.
+
+Allowed roots select the worker's cwd; they are not hard containment in full mode. The bridge passes `--sandbox` best-effort, but that is not a guaranteed filesystem boundary for every Antigravity tool or platform.
 
 ## Prompt requirements
 

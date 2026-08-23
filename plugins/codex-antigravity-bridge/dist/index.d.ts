@@ -12,6 +12,7 @@ export type PermissionMode = "restricted" | "full";
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "timed_out" | "canceled" | "orphaned";
 export type TaskMode = "coding" | "read_only";
 export type ErrorCategory = "rate_limited" | "quota_exhausted" | "session_limit" | "context_limit" | "authentication" | "upstream_error";
+export type AllowedRootSource = "environment" | "mcp_client" | "unconfigured";
 export interface BridgeConfig {
     executable: string;
     allowedRoots: string[];
@@ -98,11 +99,21 @@ export interface TaskRecord {
 /** Resolve all environment configuration without looking at credential files. */
 export declare function resolveBridgeConfig(env?: NodeJS.ProcessEnv): BridgeConfig;
 export declare function canonicalizeWorkspace(workspace: string): Promise<string>;
+/** Convert a local MCP Root URI to a path. Remote hosts and malformed URIs are never accepted. */
+export declare function fileUriToLocalPath(uri: string): string | undefined;
+/**
+ * Resolve only existing directory roots supplied by an MCP client. Canonical
+ * paths are de-duplicated so URI spelling and symlink aliases cannot widen a
+ * task's effective allowed-root set.
+ */
+export declare function canonicalizeMcpClientRoots(uris: readonly string[]): Promise<string[]>;
 /** Includes the root itself and resists prefix tricks such as C:\\safe-other. */
 export declare function isPathWithinRoot(candidate: string, root: string): boolean;
 export declare class WorkspaceGuard {
-    private readonly configuredRoots;
+    private configuredRoots;
     constructor(configuredRoots: readonly string[]);
+    setConfiguredRoots(roots: readonly string[]): void;
+    getConfiguredRoots(): readonly string[];
     canonicalRoots(): Promise<string[]>;
     assertAllowed(workspace: string): Promise<string>;
 }
@@ -130,6 +141,9 @@ export declare class AgyBridgeRuntime {
     readonly config: BridgeConfig;
     readonly jobs: Map<string, TaskRecord>;
     readonly breakers: Map<string, ModelCircuitBreaker>;
+    private allowedRootSource;
+    private rootRefreshGeneration;
+    private pendingMcpRootDiscovery;
     private readonly guard;
     private readonly spawnImpl;
     private readonly stopChildImpl;
@@ -150,6 +164,18 @@ export declare class AgyBridgeRuntime {
         taskMode?: TaskMode;
         maxRetries?: number;
     }): Promise<Record<string, unknown>>;
+    /**
+     * Apply roots advertised by the connected MCP client. Environment roots are
+     * intentionally immutable and take precedence over client-provided roots.
+     */
+    adoptMcpClientRoots(uris: readonly string[]): Promise<string[]>;
+    /** Fail closed when the MCP client cannot provide a current usable root list. */
+    clearMcpClientRoots(): void;
+    getAllowedRootSource(): AllowedRootSource;
+    hasEnvironmentRoots(): boolean;
+    /** Used by the MCP adapter so health/task requests cannot race a roots refresh. */
+    setMcpRootDiscovery(discovery: Promise<unknown>): void;
+    awaitMcpRootDiscovery(): Promise<void>;
     getTask(jobId: string, eventLimit?: number): Record<string, unknown>;
     cancelTask(jobId: string): Promise<Record<string, unknown>>;
     shutdown(): Promise<void>;
@@ -168,5 +194,16 @@ export declare class AgyBridgeRuntime {
 }
 export declare function extractModelSlugs(output: string): string[];
 export declare function parseAuthenticationStatus(output: string): "authenticated" | "unauthenticated" | "unknown";
+export interface McpRootsProvider {
+    listRoots(): Promise<{
+        roots: Array<{
+            uri: string;
+        }>;
+    }>;
+}
+/** Request a fresh standard MCP roots/list response, retaining fail-closed behavior on any error. */
+export declare function refreshMcpClientRoots(runtime: AgyBridgeRuntime, client: McpRootsProvider): Promise<string[]>;
+/** Attach roots discovery only once the MCP initialization handshake has completed. */
+export declare function configureMcpClientRootDiscovery(server: McpServer, runtime: AgyBridgeRuntime): () => Promise<string[]>;
 export declare function createMcpServer(runtime?: AgyBridgeRuntime): McpServer;
 export declare function runStdioServer(): Promise<void>;

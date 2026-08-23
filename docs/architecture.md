@@ -34,17 +34,18 @@ The bridge permits up to four concurrent jobs as a local ceiling. This is an imp
 
 ## Environment contract
 
-The MCP process inherits environment variables from the Codex process that starts it. `AGY_BRIDGE_ALLOWED_ROOTS` is mandatory and is split using the platform path delimiter (`;` on Windows, `:` on POSIX). `AGY_BRIDGE_PERMISSION_MODE` defaults to `restricted`; `full` adds Antigravity's `--dangerously-skip-permissions` flag. `AGY_BRIDGE_AGY_PATH` is optional and overrides executable discovery when `agy` is not on `PATH`. `AGY_BRIDGE_MAX_CONCURRENCY` defaults to 4 and accepts a local ceiling from 1 through 4.
+The MCP process inherits environment variables from the Codex process that starts it. `AGY_BRIDGE_ALLOWED_ROOTS` is an optional explicit override, split using the platform path delimiter (`;` on Windows, `:` on POSIX). When it is unset, the server requests standard MCP `roots/list` entries from the Codex client and follows `roots/list_changed`; it accepts only `file://` roots. The active Codex workspace plus additional roots supplied by the client are eligible. `AGY_BRIDGE_PERMISSION_MODE` defaults to `restricted`; `full` adds Antigravity's `--dangerously-skip-permissions` flag. `AGY_BRIDGE_AGY_PATH` is optional and overrides executable discovery when `agy` is not on `PATH`. `AGY_BRIDGE_MAX_CONCURRENCY` defaults to 4 and accepts a local ceiling from 1 through 4.
 
-Set or change these values before launching Codex, then restart Codex (and start a new session) so the newly spawned MCP process inherits them. Allowed roots validate the canonical task cwd only; they are not hard containment in full mode. The bridge passes `--sandbox` best-effort, but this is not a guaranteed filesystem boundary for every Antigravity tool or platform.
+Set or change environment overrides before launching Codex, then restart Codex (and start a new session) so the newly spawned MCP process inherits them. The server never defaults root discovery to `${PLUGIN_ROOT}` or `process.cwd`; if the client supplies no usable `file://` roots and no explicit override is set, task starts fail closed. Allowed roots validate the canonical task cwd only; they are not hard containment in full mode. The bridge passes `--sandbox` best-effort, but this is not a guaranteed filesystem boundary for every Antigravity tool or platform.
 
 ## Data flow
 
-1. Codex calls `antigravity_health`; the server checks the executable and public model listing. It must not read credential stores.
-2. Codex calls `antigravity_start_task` with a task, workspace, `taskMode` (`coding` or `read_only`), `maxRetries`, optional model/effort overrides, and timeout. Coding tasks use zero automatic retries; no-change read-only tasks may use at most two bounded retries. Permission mode is configured for the whole server process through the environment. The server canonicalizes and validates the workspace before spawning `agy`.
-3. The worker emits NDJSON. The server stores a bounded, sanitized event tail and a sanitized temporary log outside the repository. Logs are not returned wholesale.
-4. Codex polls with `antigravity_get_task`. The server reports lifecycle status, assistant summary, usage when provided, exit diagnostics, and changed-file inventory.
-5. Codex reviews the workspace and runs the repository's own checks. A successful worker exit is not a successful task until this review passes.
+1. The server obtains allowed roots from the explicit environment override or the Codex client's `roots/list`; it accepts only `file://` roots and tracks `roots/list_changed`. No usable roots means fail-closed task starts.
+2. Codex calls `antigravity_health`; the server checks the executable and public model listing. It must not read credential stores.
+3. Codex calls `antigravity_start_task` with a task, workspace, `taskMode` (`coding` or `read_only`), `maxRetries`, optional model/effort overrides, and timeout. Coding tasks use zero automatic retries; no-change read-only tasks may use at most two bounded retries. Permission mode is configured for the whole server process through the environment. The server canonicalizes and validates the workspace before spawning `agy`.
+4. The worker emits NDJSON. The server stores a bounded, sanitized event tail and a sanitized temporary log outside the repository. Logs are not returned wholesale.
+5. Codex polls with `antigravity_get_task`. The server reports lifecycle status, assistant summary, usage when provided, exit diagnostics, and changed-file inventory.
+6. Codex reviews the workspace and runs the repository's own checks. A successful worker exit is not a successful task until this review passes.
 
 ## Failure and conflict model
 

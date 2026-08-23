@@ -41,11 +41,13 @@ The plugin source lives under `plugins/codex-antigravity-bridge/`:
 - Node.js 22 or newer.
 - The official Antigravity CLI (`agy`) installed and authenticated through its normal interactive OAuth flow.
 - The exact model `gemini-3.7-flash-high` visible to `agy models` (the bridge does not silently downgrade to another model).
-- `AGY_BRIDGE_ALLOWED_ROOTS` set before Codex starts. At least one existing directory is mandatory; the bridge refuses task starts when it is missing.
+- Optional explicit override: `AGY_BRIDGE_ALLOWED_ROOTS`. When it is unset, the MCP server obtains roots from the Codex client through standard `roots/list`.
 
 ### Bridge environment
 
-The MCP process inherits the environment of the Codex process that launches it. Set these variables before launching (or restarting) Codex; changing them in an already-running terminal does not reconfigure a running MCP server. Start a new Codex session after changing plugin environment settings.
+The MCP process inherits the environment of the Codex process that launches it. Set or change environment overrides before launching (or restarting) Codex; changing them in an already-running terminal does not reconfigure a running MCP server. Start a new Codex session after changing plugin environment settings.
+
+When `AGY_BRIDGE_ALLOWED_ROOTS` is unset, the server asks the Codex client for standard MCP `roots/list` entries and follows `roots/list_changed`. It accepts only `file://` roots. The active Codex workspace root and any additional roots supplied by the client are eligible; the server never falls back to `${PLUGIN_ROOT}` or the MCP process's current directory. If the client provides no usable roots, task starts fail closed and you must set the explicit environment override.
 
 PowerShell uses semicolons between allowed roots:
 
@@ -57,7 +59,7 @@ codex
 
 Configuration:
 
-- `AGY_BRIDGE_ALLOWED_ROOTS` — mandatory, path-delimited roots. The bridge canonicalizes the requested workspace and validates that its current working directory is within one of these roots.
+- `AGY_BRIDGE_ALLOWED_ROOTS` — optional explicit path-delimited roots. When set, it overrides client-provided roots; the bridge canonicalizes the requested workspace and validates that its current working directory is within one of these roots. When unset, use the Codex MCP roots described above.
 - `AGY_BRIDGE_PERMISSION_MODE` — `restricted` by default; set `full` only when the user accepts broad worker permissions. In full mode the bridge passes `--dangerously-skip-permissions` to `agy`.
 - `AGY_BRIDGE_AGY_PATH` — optional absolute path to `agy` when it is not on `PATH` (for example, `C:\Users\Kushal\AppData\Local\agy\bin\agy.exe`).
 - `AGY_BRIDGE_MAX_CONCURRENCY` — optional local job ceiling from 1 through 4; defaults to 4. This does not represent or increase provider quota.
@@ -97,7 +99,7 @@ Use the plugin skill for bounded work. A safe first request is a read-only revie
 The PoC exposes the following workflow:
 
 - `antigravity_health` — inspect CLI/model readiness without returning credentials.
-- `antigravity_start_task` — start one bounded worker job in an allowed workspace. The input contract includes `taskMode` (`coding` or `read_only`) and `maxRetries`; coding tasks must use `maxRetries: 0`.
+- `antigravity_start_task` — start one bounded worker job in an allowed workspace. The input contract includes `workspace`, `taskMode` (`coding` or `read_only`), and `maxRetries`; coding tasks must use `maxRetries: 0`. A workspace must be within the explicit override roots or the usable Codex client roots.
 - `antigravity_get_task` — poll a job and retrieve a bounded event tail, result, and change summary.
 - `antigravity_cancel_task` — terminate a running job by its bridge job ID.
 

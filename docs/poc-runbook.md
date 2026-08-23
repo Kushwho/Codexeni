@@ -2,7 +2,7 @@
 
 Run the stages in order. Keep the fixture and test output outside the production repository, and do not paste authentication output into logs or issues.
 
-Before starting Codex, configure the mandatory workspace roots and permission mode. On Windows, separate roots with semicolons:
+Before starting Codex, optionally configure explicit workspace roots and permission mode. On Windows, separate override roots with semicolons:
 
 ```powershell
 $env:AGY_BRIDGE_ALLOWED_ROOTS = "C:\Users\Kushal\Desktop\BWMI\experiments\codex-antigravity-bridge\.tmp;C:\Users\Kushal\Desktop\BWMI\frontend"
@@ -10,7 +10,7 @@ $env:AGY_BRIDGE_PERMISSION_MODE = "restricted"
 codex
 ```
 
-The MCP server inherits these values from Codex, so restart Codex and open a new session after changing them. `AGY_BRIDGE_AGY_PATH` is optional when `agy` is not on `PATH`. `restricted` is the default; `full` passes `--dangerously-skip-permissions` and is not a hard sandbox. Allowed roots validate the worker's cwd, while `--sandbox` is passed best-effort and cannot guarantee containment for every tool or platform.
+The MCP server inherits these values from Codex, so restart Codex and open a new session after changing them. If `AGY_BRIDGE_ALLOWED_ROOTS` is unset, the server requests standard MCP `roots/list` from Codex, follows `roots/list_changed`, and accepts only `file://` roots. The active Codex workspace plus additional client-supplied roots are eligible; it never defaults to `${PLUGIN_ROOT}` or `process.cwd`. If no usable client roots exist, starts fail closed and the explicit override is required. `AGY_BRIDGE_AGY_PATH` is optional when `agy` is not on `PATH`. `restricted` is the default; `full` passes `--dangerously-skip-permissions` and is not a hard sandbox. Allowed roots validate the worker's cwd, while `--sandbox` is passed best-effort and cannot guarantee containment for every tool or platform.
 
 ## 1. Prerequisite and model gate
 

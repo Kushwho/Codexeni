@@ -21460,6 +21460,34 @@ function resolveBridgeConfig(env = process.env) {
 async function canonicalizeWorkspace(workspace) {
   return realpath(resolve(workspace));
 }
+function fileUriToLocalPath(uri) {
+  try {
+    const parsed = new URL(uri);
+    if (parsed.protocol !== "file:" || parsed.hostname && parsed.hostname !== "localhost") return void 0;
+    return fileURLToPath(parsed);
+  } catch {
+    return void 0;
+  }
+}
+async function canonicalizeMcpClientRoots(uris) {
+  const canonicalRoots = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const uri of uris) {
+    const localPath = fileUriToLocalPath(uri);
+    if (!localPath) continue;
+    try {
+      const canonical = await canonicalizeWorkspace(localPath);
+      if (!(await stat(canonical)).isDirectory()) continue;
+      const key = comparablePath(canonical);
+      if (!seen.has(key)) {
+        seen.add(key);
+        canonicalRoots.push(canonical);
+      }
+    } catch {
+    }
+  }
+  return canonicalRoots;
+}
 function comparablePath(value) {
   return process.platform === "win32" ? value.toLocaleLowerCase() : value;
 }
@@ -21470,8 +21498,15 @@ function isPathWithinRoot(candidate, root) {
   return pathFromRoot === "" || !pathFromRoot.startsWith(`..${sep}`) && pathFromRoot !== ".." && !pathFromRoot.includes(`..${sep}`) && !pathFromRoot.startsWith(sep);
 }
 var WorkspaceGuard = class {
+  configuredRoots;
   constructor(configuredRoots) {
-    this.configuredRoots = configuredRoots;
+    this.configuredRoots = [...configuredRoots];
+  }
+  setConfiguredRoots(roots) {
+    this.configuredRoots = [...roots];
+  }
+  getConfiguredRoots() {
+    return this.configuredRoots;
   }
   async canonicalRoots() {
     return Promise.all(this.configuredRoots.map((root) => canonicalizeWorkspace(root)));
@@ -21719,6 +21754,9 @@ var AgyBridgeRuntime = class {
   config;
   jobs = /* @__PURE__ */ new Map();
   breakers = /* @__PURE__ */ new Map();
+  allowedRootSource;
+  rootRefreshGeneration = 0;
+  pendingMcpRootDiscovery = Promise.resolve();
   guard;
   spawnImpl;
   stopChildImpl;
@@ -21732,6 +21770,7 @@ var AgyBridgeRuntime = class {
     const provided = dependencies.config ?? resolveBridgeConfig();
     this.config = { ...provided, maxConcurrency: Math.min(Math.max(1, provided.maxConcurrency), DEFAULT_MAX_CONCURRENCY) };
     this.guard = new WorkspaceGuard(this.config.allowedRoots);
+    this.allowedRootSource = this.config.allowedRoots.length > 0 ? "environment" : "unconfigured";
     this.spawnImpl = dependencies.spawnImpl ?? nodeSpawn;
     this.stopChildImpl = dependencies.stopChildImpl ?? stopChildProcess;
     this.now = dependencies.now ?? (() => /* @__PURE__ */ new Date());
@@ -21742,8 +21781,9 @@ var AgyBridgeRuntime = class {
     this.createId = dependencies.randomUUIDImpl ?? randomUUID;
   }
   async health() {
+    await this.awaitMcpRootDiscovery();
     this.expireBreakers();
-    const canonicalRoots = await Promise.all(this.config.allowedRoots.map(async (root) => {
+    const canonicalRoots = await Promise.all(this.guard.getConfiguredRoots().map(async (root) => {
       try {
         return { configured: root, canonical: await canonicalizeWorkspace(root) };
       } catch (error2) {
@@ -21758,6 +21798,7 @@ var AgyBridgeRuntime = class {
       version: version2.ok ? version2.stdout.trim() : void 0,
       authenticationStatus: models.ok ? "authenticated" : version2.ok ? "unknown" : "unavailable",
       configuredAllowedRoots: canonicalRoots,
+      allowedRootSource: this.allowedRootSource,
       permissionMode: this.config.permissionMode,
       defaultModel: this.config.defaultModel,
       maxConcurrency: this.config.maxConcurrency,
@@ -21768,6 +21809,7 @@ var AgyBridgeRuntime = class {
     };
   }
   async startTask(input) {
+    await this.awaitMcpRootDiscovery();
     if (!input.task.trim()) throw new Error("Task must not be empty.");
     if (!input.workspace.trim()) throw new Error("Workspace must not be empty.");
     if (input.timeoutSeconds !== void 0 && (!Number.isSafeInteger(input.timeoutSeconds) || input.timeoutSeconds <= 0 || input.timeoutSeconds > this.config.defaultTimeoutSeconds)) {
@@ -21816,6 +21858,44 @@ var AgyBridgeRuntime = class {
       record2.stderrSummary = error2 instanceof Error ? error2.message : String(error2);
     }
     return { jobId: id, status: record2.status, warnings: record2.warnings, workspace, model: record2.model, taskMode: record2.taskMode, maxRetries: record2.maxRetries };
+  }
+  /**
+   * Apply roots advertised by the connected MCP client. Environment roots are
+   * intentionally immutable and take precedence over client-provided roots.
+   */
+  async adoptMcpClientRoots(uris) {
+    if (this.config.allowedRoots.length > 0) return [...this.config.allowedRoots];
+    const generation = ++this.rootRefreshGeneration;
+    const roots = await canonicalizeMcpClientRoots(uris);
+    if (generation !== this.rootRefreshGeneration) return [...this.guard.getConfiguredRoots()];
+    this.guard.setConfiguredRoots(roots);
+    this.allowedRootSource = roots.length > 0 ? "mcp_client" : "unconfigured";
+    return roots;
+  }
+  /** Fail closed when the MCP client cannot provide a current usable root list. */
+  clearMcpClientRoots() {
+    if (this.config.allowedRoots.length > 0) return;
+    this.rootRefreshGeneration += 1;
+    this.guard.setConfiguredRoots([]);
+    this.allowedRootSource = "unconfigured";
+  }
+  getAllowedRootSource() {
+    return this.allowedRootSource;
+  }
+  hasEnvironmentRoots() {
+    return this.config.allowedRoots.length > 0;
+  }
+  /** Used by the MCP adapter so health/task requests cannot race a roots refresh. */
+  setMcpRootDiscovery(discovery) {
+    this.pendingMcpRootDiscovery = discovery.then(
+      () => void 0,
+      () => {
+        this.clearMcpClientRoots();
+      }
+    );
+  }
+  async awaitMcpRootDiscovery() {
+    await this.pendingMcpRootDiscovery;
   }
   getTask(jobId, eventLimit = 50) {
     const record2 = this.jobs.get(jobId);
@@ -22110,8 +22190,29 @@ var taskInput = {
   maxRetries: external_exports.number().int().min(0).max(DEFAULT_READ_ONLY_MAX_RETRIES).optional()
 };
 var jsonResult = (payload, isError = false) => ({ content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], structuredContent: payload, isError });
+async function refreshMcpClientRoots(runtime, client) {
+  if (runtime.hasEnvironmentRoots()) return [...runtime.config.allowedRoots];
+  try {
+    const response = await client.listRoots();
+    return await runtime.adoptMcpClientRoots(Array.isArray(response?.roots) ? response.roots.map((root) => root?.uri).filter((uri) => typeof uri === "string") : []);
+  } catch {
+    runtime.clearMcpClientRoots();
+    return [];
+  }
+}
+function configureMcpClientRootDiscovery(server, runtime) {
+  const refresh = () => refreshMcpClientRoots(runtime, server.server);
+  server.server.oninitialized = () => {
+    runtime.setMcpRootDiscovery(refresh());
+  };
+  server.server.setNotificationHandler(RootsListChangedNotificationSchema, () => {
+    runtime.setMcpRootDiscovery(refresh());
+  });
+  return refresh;
+}
 function createMcpServer(runtime = new AgyBridgeRuntime()) {
   const server = new McpServer({ name: "codex-antigravity-bridge", version: "0.1.0" });
+  configureMcpClientRootDiscovery(server, runtime);
   server.registerTool("antigravity_health", { description: "Check the local Antigravity CLI bridge without reading credentials.", annotations: { readOnlyHint: true, openWorldHint: false } }, async () => jsonResult(await runtime.health()));
   server.registerTool("antigravity_start_task", { description: "Start an asynchronous Antigravity coding or read-only task. Full mode grants broad local tool access; the allowed-root check selects cwd but is not a security sandbox.", inputSchema: taskInput, annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true } }, async (input) => {
     try {
@@ -22160,15 +22261,19 @@ export {
   WorkspaceGuard,
   buildAgyArgs,
   buildDelegationPrompt,
+  canonicalizeMcpClientRoots,
   canonicalizeWorkspace,
   classifyFailure,
+  configureMcpClientRootDiscovery,
   createMcpServer,
   diffSnapshots,
   extractModelSlugs,
+  fileUriToLocalPath,
   isPathWithinRoot,
   parseAuthenticationStatus,
   parseNdjsonLine,
   parseRetryAfterMs,
+  refreshMcpClientRoots,
   resolveBridgeConfig,
   runStdioServer,
   snapshotWorkspace
