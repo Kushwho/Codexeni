@@ -27,7 +27,7 @@ switch (scenario) {
   case "success":
     emit({ type: "message", role: "assistant", content: "Fake task started." });
     emit({ type: "message", role: "assistant", content: "Fake task completed." });
-    emit({ type: "result", status: "completed", conversation_id: "fake-conversation", usage: { input_tokens: 3, output_tokens: 5 } });
+    emit({ type: "result", status: "SUCCESS", conversation_id: "fake-conversation", usage: { input_tokens: 3, output_tokens: 5 } });
     break;
   case "malformed":
     process.stdout.write("this is not JSON\n");
@@ -40,7 +40,7 @@ switch (scenario) {
   case "slow":
     emit({ type: "message", role: "assistant", content: "Fake task started." });
     await delay(Number(process.env.FAKE_AGY_DELAY_MS ?? 5000));
-    emit({ type: "result", status: "completed", conversation_id: "slow-fake" });
+    emit({ type: "result", status: "SUCCESS", conversation_id: "slow-fake" });
     break;
   default:
     process.stderr.write(`Unknown FAKE_AGY_SCENARIO: ${scenario}\n`);

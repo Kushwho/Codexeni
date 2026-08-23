@@ -77,7 +77,7 @@ test("MCP file-root parsing accepts local roots only and handles Windows file UR
   assert.deepEqual(roots, [await bridge.canonicalizeWorkspace(root)]);
 });
 
-test("explicit allowed roots override MCP roots; empty and unsupported MCP roots fail closed", async () => {
+test("explicit allowed roots override MCP roots; zero-config uses each task workspace", async () => {
   const envWorkspace = await makeWorkspace();
   const clientWorkspace = await makeWorkspace();
   const { spawnImpl } = createFakeSpawn([{ close: false }]);
@@ -92,13 +92,41 @@ test("explicit allowed roots override MCP roots; empty and unsupported MCP roots
   );
   await explicitRuntime.shutdown();
 
-  const unsetRuntime = new bridge.AgyBridgeRuntime({ config: config(envWorkspace.root, { allowedRoots: [] }) });
+  const unsetRuntime = new bridge.AgyBridgeRuntime({
+    config: config(envWorkspace.root, { allowedRoots: [] }), spawnImpl, stopChildImpl: stopFakeChild,
+  });
   await unsetRuntime.adoptMcpClientRoots(["https://example.com/root", "file://remote-host/root", "file:///missing-root"]);
-  assert.equal(unsetRuntime.getAllowedRootSource(), "unconfigured");
-  await assert.rejects(
-    () => unsetRuntime.startTask({ task: "must fail closed", workspace: envWorkspace.root }),
-    /allowed workspace roots|ALLOWED_ROOTS/i,
-  );
+  assert.equal(unsetRuntime.getAllowedRootSource(), "task_workspace");
+  const started = await unsetRuntime.startTask({ task: "use the requested workspace", workspace: envWorkspace.root });
+  assert.equal(started.workspace, await bridge.canonicalizeWorkspace(envWorkspace.root));
+  await unsetRuntime.shutdown();
+});
+
+test("zero-config health advertises restricted task-workspace fallback before and after a task", async () => {
+  const { root } = await makeWorkspace();
+  const other = await makeWorkspace();
+  const { spawnImpl } = createFakeSpawn([{}, {}, { close: false }, {}, {}, { close: false }]);
+  const runtime = new bridge.AgyBridgeRuntime({
+    config: config(root, { allowedRoots: [] }), spawnImpl, stopChildImpl: stopFakeChild,
+  });
+  const before = await runtime.health();
+  assert.equal(before.allowedRootSource, "task_workspace");
+  assert.equal(before.taskWorkspace, undefined);
+  assert.equal(before.taskWorkspaceFallback, true);
+  assert.equal(before.permissionMode, "restricted");
+
+  const first = await runtime.startTask({ task: "bounded to the first workspace", workspace: root });
+  assert.equal(first.workspace, await bridge.canonicalizeWorkspace(root));
+  const afterFirst = await runtime.health();
+  assert.equal(afterFirst.allowedRootSource, "task_workspace");
+  assert.equal(afterFirst.taskWorkspace, await bridge.canonicalizeWorkspace(root));
+  assert.equal(afterFirst.permissionMode, "restricted");
+
+  const second = await runtime.startTask({ task: "a separate workspace gets its own boundary", workspace: other.root });
+  assert.equal(second.workspace, await bridge.canonicalizeWorkspace(other.root));
+  const afterSecond = await runtime.health();
+  assert.equal(afterSecond.taskWorkspace, await bridge.canonicalizeWorkspace(other.root));
+  await runtime.shutdown();
 });
 
 test("refreshMcpClientRoots adopts and refreshes dynamic client roots while reporting their source", async () => {
@@ -176,11 +204,14 @@ test("Agy arguments retain hostile task text as one prompt argument", () => {
     "--output-format", "stream-json",
     "--effort", "high",
     "--sandbox",
+    "--mode", "accept-edits",
     "--prompt", hostileTask,
   ]);
   assert.equal(args.filter((arg) => arg === hostileTask).length, 1);
   assert.ok(!args.includes("--dangerously-skip-permissions"));
   assert.ok(bridge.buildAgyArgs({ task: "x", model: "m", effort: "low", permissionMode: "full" }).includes("--dangerously-skip-permissions"));
+  const readOnlyArgs = bridge.buildAgyArgs({ task: "review", model: "m", effort: "high", permissionMode: "restricted", taskMode: "read_only" });
+  assert.equal(readOnlyArgs[readOnlyArgs.indexOf("--mode") + 1], "plan");
 });
 
 test("workspace guard rejects traversal, prefix tricks, and escaping symlinks", async (t) => {

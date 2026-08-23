@@ -13,7 +13,7 @@ Before delegating:
 
 1. Explain that Antigravity will be used before the first delegation in a turn. The tool approval is the final start gate.
 2. Call `antigravity_health` once per session. Require the `agy` CLI to be available, authenticated through its normal OAuth flow, and to expose the exact requested Gemini 3.7 Flash model. Do not fall back to another model without asking.
-3. Resolve the allowed workspace roots. If `AGY_BRIDGE_ALLOWED_ROOTS` is set, treat it as the explicit override. Otherwise rely on standard MCP `roots/list` and `roots/list_changed` from clients that advertise them, accepting only `file://` roots. Codex CLI 0.149 does not advertise roots; for it, ask the user to launch Codex from the target workspace after setting `$env:AGY_BRIDGE_ALLOWED_ROOTS = (Get-Location).Path` (or the POSIX equivalent). Never invent a machine-specific path or assume `${PLUGIN_ROOT}`/`process.cwd` is a usable root; fail closed when neither source exists.
+3. Resolve the workspace boundary. If `AGY_BRIDGE_ALLOWED_ROOTS` is set, treat it as the explicit override. Otherwise use standard MCP `roots/list` and `roots/list_changed` from clients that advertise them, accepting only `file://` roots. When neither source provides a root, pass the user's current Codex workspace as `workspace`; the bridge canonicalizes that exact path and uses it as the boundary for that task. Do not ask the user to configure an environment variable in this normal zero-config case. Never use `${PLUGIN_ROOT}` or the MCP server's `process.cwd` as the user's workspace.
 4. Define one small objective with explicit in-scope paths, allowed commands, expected tests, and a stop condition. Ask a follow-up question if the request is broad, ambiguous, security-sensitive, or would touch credentials, production systems, generated lockfiles, or unrelated repositories.
 5. Read all applicable `AGENTS.md` files and include the relevant constraints in the worker prompt. Tell Antigravity to read them too.
 6. Check the current working tree and record the baseline. Do not delegate when there are unreviewed changes that overlap the requested paths unless the user explicitly accepts that risk.
@@ -23,6 +23,8 @@ Before delegating:
 - Use `taskMode: "read_only"` for analysis, test suggestions, or a proposed patch. Require no file changes and set `maxRetries` no higher than 2.
 - Use `taskMode: "coding"` only for an isolated, reversible change. Set `maxRetries: 0`, include the exact allowed paths, and tell the worker not to modify anything else.
 - Use `antigravity_start_task` with the default exact model `gemini-3.7-flash-high`, high effort, and a bounded timeout. A start call may edit files or run commands, so obtain the normal Codex/user approval before making it.
+
+Restricted coding mode auto-accepts explicit workspace edits, but headless Antigravity still denies terminal commands that require approval unless the user's Antigravity settings contain a matching scoped `permissions.allow` rule. Report such a denial accurately; never switch to `full` automatically.
 
 The bridge permits up to four concurrent jobs locally. This is a local ceiling, not a published Antigravity concurrency quota. Never schedule simultaneous writers for the same workspace; their changes are unsafe to overlap.
 

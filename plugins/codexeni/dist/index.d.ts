@@ -12,7 +12,7 @@ export type PermissionMode = "restricted" | "full";
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "timed_out" | "canceled" | "orphaned";
 export type TaskMode = "coding" | "read_only";
 export type ErrorCategory = "rate_limited" | "quota_exhausted" | "session_limit" | "context_limit" | "authentication" | "upstream_error";
-export type AllowedRootSource = "environment" | "mcp_client" | "unconfigured";
+export type AllowedRootSource = "environment" | "mcp_client" | "task_workspace";
 export interface BridgeConfig {
     executable: string;
     allowedRoots: string[];
@@ -115,7 +115,7 @@ export declare class WorkspaceGuard {
     setConfiguredRoots(roots: readonly string[]): void;
     getConfiguredRoots(): readonly string[];
     canonicalRoots(): Promise<string[]>;
-    assertAllowed(workspace: string): Promise<string>;
+    assertAllowed(workspace: string, allowTaskWorkspaceFallback?: boolean): Promise<string>;
 }
 export declare function buildAgyArgs(input: {
     task: string;
@@ -142,6 +142,7 @@ export declare class AgyBridgeRuntime {
     readonly jobs: Map<string, TaskRecord>;
     readonly breakers: Map<string, ModelCircuitBreaker>;
     private allowedRootSource;
+    private taskWorkspace?;
     private rootRefreshGeneration;
     private pendingMcpRootDiscovery;
     private readonly guard;
@@ -169,7 +170,7 @@ export declare class AgyBridgeRuntime {
      * intentionally immutable and take precedence over client-provided roots.
      */
     adoptMcpClientRoots(uris: readonly string[]): Promise<string[]>;
-    /** Fail closed when the MCP client cannot provide a current usable root list. */
+    /** Fall back to the requested task workspace when no MCP root is usable. */
     clearMcpClientRoots(): void;
     getAllowedRootSource(): AllowedRootSource;
     hasEnvironmentRoots(): boolean;

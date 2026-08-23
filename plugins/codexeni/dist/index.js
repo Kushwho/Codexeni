@@ -21511,9 +21511,10 @@ var WorkspaceGuard = class {
   async canonicalRoots() {
     return Promise.all(this.configuredRoots.map((root) => canonicalizeWorkspace(root)));
   }
-  async assertAllowed(workspace) {
+  async assertAllowed(workspace, allowTaskWorkspaceFallback = false) {
     if (this.configuredRoots.length === 0) {
-      throw new Error("No allowed workspace roots are available. This Codex client did not provide MCP roots; set AGY_BRIDGE_ALLOWED_ROOTS before launching Codex.");
+      if (allowTaskWorkspaceFallback) return canonicalizeWorkspace(workspace);
+      throw new Error("No allowed workspace roots are available for this operation.");
     }
     const [canonicalWorkspace, canonicalRoots] = await Promise.all([
       canonicalizeWorkspace(workspace),
@@ -21526,7 +21527,17 @@ var WorkspaceGuard = class {
   }
 };
 function buildAgyArgs(input) {
-  const args = ["--model", input.model, "--output-format", "stream-json", "--effort", input.effort, "--sandbox"];
+  const args = [
+    "--model",
+    input.model,
+    "--output-format",
+    "stream-json",
+    "--effort",
+    input.effort,
+    "--sandbox",
+    "--mode",
+    input.taskMode === "read_only" ? "plan" : "accept-edits"
+  ];
   if (input.permissionMode === "full") args.push("--dangerously-skip-permissions");
   args.push("--prompt", buildDelegationPrompt(input.task, input.workspace, input.taskMode));
   return args;
@@ -21755,6 +21766,7 @@ var AgyBridgeRuntime = class {
   jobs = /* @__PURE__ */ new Map();
   breakers = /* @__PURE__ */ new Map();
   allowedRootSource;
+  taskWorkspace;
   rootRefreshGeneration = 0;
   pendingMcpRootDiscovery = Promise.resolve();
   guard;
@@ -21770,7 +21782,7 @@ var AgyBridgeRuntime = class {
     const provided = dependencies.config ?? resolveBridgeConfig();
     this.config = { ...provided, maxConcurrency: Math.min(Math.max(1, provided.maxConcurrency), DEFAULT_MAX_CONCURRENCY) };
     this.guard = new WorkspaceGuard(this.config.allowedRoots);
-    this.allowedRootSource = this.config.allowedRoots.length > 0 ? "environment" : "unconfigured";
+    this.allowedRootSource = this.config.allowedRoots.length > 0 ? "environment" : "task_workspace";
     this.spawnImpl = dependencies.spawnImpl ?? nodeSpawn;
     this.stopChildImpl = dependencies.stopChildImpl ?? stopChildProcess;
     this.now = dependencies.now ?? (() => /* @__PURE__ */ new Date());
@@ -21799,6 +21811,8 @@ var AgyBridgeRuntime = class {
       authenticationStatus: models.ok ? "authenticated" : version2.ok ? "unknown" : "unavailable",
       configuredAllowedRoots: canonicalRoots,
       allowedRootSource: this.allowedRootSource,
+      taskWorkspace: this.taskWorkspace,
+      taskWorkspaceFallback: this.allowedRootSource === "task_workspace",
       permissionMode: this.config.permissionMode,
       defaultModel: this.config.defaultModel,
       maxConcurrency: this.config.maxConcurrency,
@@ -21822,7 +21836,9 @@ var AgyBridgeRuntime = class {
     if (taskMode !== "coding" && taskMode !== "read_only") throw new Error("taskMode must be either coding or read_only.");
     const model = input.model ?? this.config.defaultModel;
     this.assertModelAvailable(model);
-    const workspace = await this.guard.assertAllowed(input.workspace);
+    const usingTaskWorkspaceFallback = this.guard.getConfiguredRoots().length === 0;
+    const workspace = await this.guard.assertAllowed(input.workspace, true);
+    if (usingTaskWorkspaceFallback) this.taskWorkspace = workspace;
     const active = [...this.jobs.values()].filter((job) => job.status === "running" || job.status === "queued");
     if (active.length >= this.config.maxConcurrency) throw new Error(`Maximum concurrency (${this.config.maxConcurrency}) reached.`);
     const id = this.createId();
@@ -21869,15 +21885,15 @@ var AgyBridgeRuntime = class {
     const roots = await canonicalizeMcpClientRoots(uris);
     if (generation !== this.rootRefreshGeneration) return [...this.guard.getConfiguredRoots()];
     this.guard.setConfiguredRoots(roots);
-    this.allowedRootSource = roots.length > 0 ? "mcp_client" : "unconfigured";
+    this.allowedRootSource = roots.length > 0 ? "mcp_client" : "task_workspace";
     return roots;
   }
-  /** Fail closed when the MCP client cannot provide a current usable root list. */
+  /** Fall back to the requested task workspace when no MCP root is usable. */
   clearMcpClientRoots() {
     if (this.config.allowedRoots.length > 0) return;
     this.rootRefreshGeneration += 1;
     this.guard.setConfiguredRoots([]);
-    this.allowedRootSource = "unconfigured";
+    this.allowedRootSource = "task_workspace";
   }
   getAllowedRootSource() {
     return this.allowedRootSource;
@@ -22182,7 +22198,7 @@ function parseAuthenticationStatus(output) {
 }
 var taskInput = {
   task: external_exports.string().min(1).max(1e5),
-  workspace: external_exports.string().min(1),
+  workspace: external_exports.string().min(1).describe("Absolute path of the current Codex workspace; in zero-config mode this exact canonical directory is the task boundary."),
   effort: external_exports.enum(["low", "medium", "high"]).optional(),
   timeoutSeconds: external_exports.number().int().positive().max(DEFAULT_TIMEOUT_SECONDS).optional(),
   model: external_exports.string().min(1).max(200).optional(),
