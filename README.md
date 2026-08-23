@@ -13,12 +13,10 @@ Requirements:
 - `agy` installed and authenticated
 - `gemini-3.7-flash-high` listed by `agy models`
 
-Clone the repository, add its marketplace, and install the plugin:
+Add the GitHub repository as a Codex marketplace and install the plugin—no clone required:
 
 ```powershell
-git clone https://github.com/Kushwho/Codexeni.git
-cd Codexeni
-codex plugin marketplace add .
+codex plugin marketplace add Kushwho/Codexeni --ref main
 codex plugin add codexeni@personal
 ```
 
