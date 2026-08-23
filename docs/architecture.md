@@ -6,7 +6,7 @@
 Codex model
    │ MCP stdio
    ▼
-codex-antigravity-bridge (Node MCP server)
+Codexeni (Node MCP server)
    │ argv + inherited environment; no token handling
    ▼
 agy --output-format stream-json --model gemini-3.7-flash-high
@@ -15,7 +15,7 @@ agy --output-format stream-json --model gemini-3.7-flash-high
 Antigravity CLI authentication and local coding tools
 ```
 
-The plugin manifest points Codex at `.mcp.json`. Codex resolves `${PLUGIN_ROOT}` to the installed plugin directory, so the MCP command remains portable after marketplace installation. The build bundles runtime dependencies into `dist/index.js`; this avoids relying on workspace-specific pnpm links after Codex copies the plugin into its cache:
+The plugin manifest points Codex at `.mcp.json`. Its stdio entry uses `cwd: "."` and launches `./dist/index.js`, so the command remains relative to the installed plugin directory after marketplace installation. The build bundles runtime dependencies into `dist/index.js`; this avoids relying on workspace-specific pnpm links after Codex copies the plugin into its cache:
 
 ```json
 {
@@ -34,7 +34,7 @@ The bridge permits up to four concurrent jobs as a local ceiling. This is an imp
 
 ## Environment contract
 
-The MCP process inherits environment variables from the Codex process that starts it. `AGY_BRIDGE_ALLOWED_ROOTS` is an optional explicit override, split using the platform path delimiter (`;` on Windows, `:` on POSIX). When it is unset, the server requests standard MCP `roots/list` entries from the Codex client and follows `roots/list_changed`; it accepts only `file://` roots. The active Codex workspace plus additional roots supplied by the client are eligible. `AGY_BRIDGE_PERMISSION_MODE` defaults to `restricted`; `full` adds Antigravity's `--dangerously-skip-permissions` flag. `AGY_BRIDGE_AGY_PATH` is optional and overrides executable discovery when `agy` is not on `PATH`. `AGY_BRIDGE_MAX_CONCURRENCY` defaults to 4 and accepts a local ceiling from 1 through 4.
+The MCP configuration allow-lists the bridge environment variables inherited from the Codex process. `AGY_BRIDGE_ALLOWED_ROOTS` is an explicit override, split using the platform path delimiter (`;` on Windows, `:` on POSIX). When it is unset, the server requests standard MCP `roots/list` entries from the Codex client and follows `roots/list_changed`; it accepts only `file://` roots. Clients that advertise the active workspace plus additional roots need no override. Codex CLI 0.149 does not advertise roots, so it requires the override. `AGY_BRIDGE_PERMISSION_MODE` defaults to `restricted`; `full` adds Antigravity's `--dangerously-skip-permissions` flag. `AGY_BRIDGE_AGY_PATH` is optional and overrides executable discovery when `agy` is not on `PATH`. `AGY_BRIDGE_MAX_CONCURRENCY` defaults to 4 and accepts a local ceiling from 1 through 4.
 
 Set or change environment overrides before launching Codex, then restart Codex (and start a new session) so the newly spawned MCP process inherits them. The server never defaults root discovery to `${PLUGIN_ROOT}` or `process.cwd`; if the client supplies no usable `file://` roots and no explicit override is set, task starts fail closed. Allowed roots validate the canonical task cwd only; they are not hard containment in full mode. The bridge passes `--sandbox` best-effort, but this is not a guaranteed filesystem boundary for every Antigravity tool or platform.
 

@@ -1,4 +1,4 @@
-# Codex–Antigravity Bridge
+# Codexeni
 
 An experimental, unofficial bridge that lets Codex orchestrate bounded coding work in a local Antigravity CLI session. The bridge is packaged as a Codex plugin and uses the authenticated `agy` executable as the worker transport; Codex remains responsible for decomposition, approvals, conflict review, and final verification.
 
@@ -25,12 +25,12 @@ The bridge is not a native Codex subagent and cannot guarantee worktree isolatio
 
 ## PoC layout
 
-The plugin source lives under `plugins/codex-antigravity-bridge/`:
+The plugin source lives under `plugins/codexeni/`:
 
 - `src/` — TypeScript MCP server (built by the runtime owner).
 - `dist/` — self-contained compiled runtime bundled for installation, so the cached plugin does not depend on pnpm symlinks.
 - `.codex-plugin/plugin.json` — plugin metadata.
-- `.mcp.json` — portable MCP launch configuration using `${PLUGIN_ROOT}`.
+- `.mcp.json` — portable MCP launch configuration using the installed plugin directory as its working directory.
 - `skills/antigravity-delegation/SKILL.md` — bounded delegation and verification workflow.
 - `scripts/` — non-secret prerequisite checks.
 - `fixtures/` — deterministic fake `agy` used by tests; it never reads credentials.
@@ -41,27 +41,29 @@ The plugin source lives under `plugins/codex-antigravity-bridge/`:
 - Node.js 22 or newer.
 - The official Antigravity CLI (`agy`) installed and authenticated through its normal interactive OAuth flow.
 - The exact model `gemini-3.7-flash-high` visible to `agy models` (the bridge does not silently downgrade to another model).
-- Optional explicit override: `AGY_BRIDGE_ALLOWED_ROOTS`. When it is unset, the MCP server obtains roots from the Codex client through standard `roots/list`.
+- An allowed-root source: standard MCP `roots/list` when the Codex client supports it, or the explicit `AGY_BRIDGE_ALLOWED_ROOTS` environment override.
 
 ### Bridge environment
 
 The MCP process inherits the environment of the Codex process that launches it. Set or change environment overrides before launching (or restarting) Codex; changing them in an already-running terminal does not reconfigure a running MCP server. Start a new Codex session after changing plugin environment settings.
 
-When `AGY_BRIDGE_ALLOWED_ROOTS` is unset, the server asks the Codex client for standard MCP `roots/list` entries and follows `roots/list_changed`. It accepts only `file://` roots. The active Codex workspace root and any additional roots supplied by the client are eligible; the server never falls back to `${PLUGIN_ROOT}` or the MCP process's current directory. If the client provides no usable roots, task starts fail closed and you must set the explicit environment override.
+When `AGY_BRIDGE_ALLOWED_ROOTS` is unset, the server asks the Codex client for standard MCP `roots/list` entries and follows `roots/list_changed`. It accepts only `file://` roots. Clients that advertise the active workspace and additional roots work without an override. Codex CLI 0.149 does not currently advertise roots, so its sessions need the explicit override. The server never falls back to `${PLUGIN_ROOT}` or the MCP process's current directory, and task starts fail closed when neither source is available.
 
-PowerShell uses semicolons between allowed roots:
+For a per-terminal root that follows the directory from which you launch Codex, use:
 
 ```powershell
-$env:AGY_BRIDGE_ALLOWED_ROOTS = "C:\Users\Kushal\Desktop\BWMI\frontend;C:\Users\Kushal\Desktop\BWMI\experiments\codex-antigravity-bridge"
+$env:AGY_BRIDGE_ALLOWED_ROOTS = (Get-Location).Path
 $env:AGY_BRIDGE_PERMISSION_MODE = "restricted"
 codex
 ```
 
+Use semicolons to allow multiple Windows roots. The plugin MCP configuration explicitly passes these bridge variables from the Codex parent process; restart existing Codex terminals after changing them.
+
 Configuration:
 
-- `AGY_BRIDGE_ALLOWED_ROOTS` — optional explicit path-delimited roots. When set, it overrides client-provided roots; the bridge canonicalizes the requested workspace and validates that its current working directory is within one of these roots. When unset, use the Codex MCP roots described above.
+- `AGY_BRIDGE_ALLOWED_ROOTS` — explicit path-delimited roots for Codex clients that do not advertise MCP roots. When set, it overrides client-provided roots; the bridge canonicalizes the requested workspace and validates that its current working directory is within one of these roots.
 - `AGY_BRIDGE_PERMISSION_MODE` — `restricted` by default; set `full` only when the user accepts broad worker permissions. In full mode the bridge passes `--dangerously-skip-permissions` to `agy`.
-- `AGY_BRIDGE_AGY_PATH` — optional absolute path to `agy` when it is not on `PATH` (for example, `C:\Users\Kushal\AppData\Local\agy\bin\agy.exe`).
+- `AGY_BRIDGE_AGY_PATH` — optional absolute path to `agy` when it is not on `PATH` (for example, `C:\Tools\agy\agy.exe`).
 - `AGY_BRIDGE_MAX_CONCURRENCY` — optional local job ceiling from 1 through 4; defaults to 4. This does not represent or increase provider quota.
 
 Allowed roots are a workspace-selection guard, not a hard containment boundary. In full mode, Antigravity may still reach outside the selected root through its tools. The bridge passes `--sandbox` best-effort, but that flag is not a guaranteed filesystem sandbox for every tool or platform. Use a clean branch or disposable worktree and review every diff.
@@ -69,13 +71,13 @@ Allowed roots are a workspace-selection guard, not a hard containment boundary. 
 The setup check only invokes `agy --version` and `agy models`. It never reads OAuth files, browser storage, environment variables containing tokens, or raw auth state:
 
 ```powershell
-cd experiments/codex-antigravity-bridge/plugins/codex-antigravity-bridge
-./scripts/setup.ps1 -AllowedRoots "C:\Users\Kushal\Desktop\BWMI\frontend;C:\Users\Kushal\Desktop\BWMI\experiments\codex-antigravity-bridge"
+cd Codexeni/plugins/codexeni
+./scripts/setup.ps1
 ```
 
 ```sh
-cd experiments/codex-antigravity-bridge/plugins/codex-antigravity-bridge
-AGY_BRIDGE_ALLOWED_ROOTS="$PWD/../../.." ./scripts/setup.sh
+cd Codexeni/plugins/codexeni
+./scripts/setup.sh
 ```
 
 If the check fails for authentication, use the normal interactive `agy` login flow supplied by your installation, then rerun the check. Do not paste a token into Codex or an issue.
@@ -85,12 +87,12 @@ If the check fails for authentication, use the normal interactive `agy` login fl
 Build the runtime first (the runtime package owns its dependency installation and tests):
 
 ```powershell
-cd experiments/codex-antigravity-bridge/plugins/codex-antigravity-bridge
+cd Codexeni/plugins/codexeni
 pnpm install
 pnpm build
 ```
 
-The repo-local marketplace is at `experiments/codex-antigravity-bridge/.agents/plugins/marketplace.json`. Add that marketplace to Codex if it is not already configured, then install `codex-antigravity-bridge` and start a new Codex session so its skills and MCP tools are loaded.
+The repo-local marketplace is at `Codexeni/.agents/plugins/marketplace.json`. Add that marketplace to Codex if it is not already configured, then install `codexeni` and start a new Codex session so its skills and MCP tools are loaded.
 
 Use the plugin skill for bounded work. A safe first request is a read-only review or a small disposable fixture change. For a mutating task, state the allowed paths and required checks explicitly; Codex should inspect the complete diff and rerun verification after Antigravity finishes.
 
@@ -128,7 +130,7 @@ The bridge is ready for a public plugin experiment only when all of the followin
 
 1. `agy --version`, `agy models`, and one headless Gemini 3.7 Flash smoke task succeed.
 2. The fake-`agy` fixture covers success, malformed output, failure, slow/timeout, and cancellation paths.
-3. Codex independently reviews the diff and reruns the fixture or BWMI checks after a real bounded task.
+3. Codex independently reviews the diff and reruns the fixture or target-repository checks after a real bounded task.
 4. No credentials, auth state, raw logs, or unrelated files enter the repository.
 
 See [`docs/poc-runbook.md`](docs/poc-runbook.md) for the staged test procedure and [`docs/architecture.md`](docs/architecture.md) for the process and trust boundaries.

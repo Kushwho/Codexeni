@@ -1,12 +1,12 @@
 # Local build and dependency output
-plugins/codex-antigravity-bridge/node_modules/
-plugins/codex-antigravity-bridge/.pnpm-store/
-plugins/codex-antigravity-bridge/*.tsbuildinfo
+plugins/codexeni/node_modules/
+plugins/codexeni/.pnpm-store/
+plugins/codexeni/*.tsbuildinfo
 
 # Test and runtime artifacts; raw worker logs must stay outside the repository.
-plugins/codex-antigravity-bridge/test-results/
-plugins/codex-antigravity-bridge/coverage/
-plugins/codex-antigravity-bridge/logs/
+plugins/codexeni/test-results/
+plugins/codexeni/coverage/
+plugins/codexeni/logs/
 *.agy.log
 .tmp/
 

@@ -71,7 +71,7 @@ export function createManualTimers() {
   return { setTimeoutImpl, clearTimeoutImpl, pending, runNext };
 }
 
-export async function makeWorkspace(prefix = "codex-antigravity-bridge-") {
+export async function makeWorkspace(prefix = "codexeni-") {
   const root = await mkdtemp(join(tmpdir(), prefix));
   const nested = join(root, "nested");
   await mkdir(nested);

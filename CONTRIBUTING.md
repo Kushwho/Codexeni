@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping test the Codex–Antigravity Bridge. This is an experimental integration; keep changes small and evidence-based.
+Thanks for helping test Codexeni. This is an experimental integration; keep changes small and evidence-based.
 
 ## Before opening a change
 
@@ -11,9 +11,9 @@ Thanks for helping test the Codex–Antigravity Bridge. This is an experimental 
 
 ## Required checks
 
-For runtime changes, run the typecheck, build, and deterministic fake-`agy` tests from `plugins/codex-antigravity-bridge/`. For packaging or skill changes, run the plugin validator and inspect the manifest, `.mcp.json`, skill frontmatter, and all referenced paths.
+For runtime changes, run the typecheck, build, and deterministic fake-`agy` tests from `plugins/codexeni/`. For packaging or skill changes, run the plugin validator and inspect the manifest, `.mcp.json`, skill frontmatter, and all referenced paths.
 
-For BWMI integration experiments, follow the repository instructions and run frontend commands from `frontend/`. Codex must independently verify any files changed by an Antigravity worker.
+For integration experiments, follow the target repository's instructions and run its documented checks from the required working directory. Codex must independently verify any files changed by an Antigravity worker.
 
 ## Pull requests
 

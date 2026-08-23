@@ -2,15 +2,15 @@
 
 Run the stages in order. Keep the fixture and test output outside the production repository, and do not paste authentication output into logs or issues.
 
-Before starting Codex, optionally configure explicit workspace roots and permission mode. On Windows, separate override roots with semicolons:
+Before starting a Codex CLI 0.149 session, configure its workspace root and permission mode. On Windows, separate multiple roots with semicolons:
 
 ```powershell
-$env:AGY_BRIDGE_ALLOWED_ROOTS = "C:\Users\Kushal\Desktop\BWMI\experiments\codex-antigravity-bridge\.tmp;C:\Users\Kushal\Desktop\BWMI\frontend"
+$env:AGY_BRIDGE_ALLOWED_ROOTS = (Get-Location).Path
 $env:AGY_BRIDGE_PERMISSION_MODE = "restricted"
 codex
 ```
 
-The MCP server inherits these values from Codex, so restart Codex and open a new session after changing them. If `AGY_BRIDGE_ALLOWED_ROOTS` is unset, the server requests standard MCP `roots/list` from Codex, follows `roots/list_changed`, and accepts only `file://` roots. The active Codex workspace plus additional client-supplied roots are eligible; it never defaults to `${PLUGIN_ROOT}` or `process.cwd`. If no usable client roots exist, starts fail closed and the explicit override is required. `AGY_BRIDGE_AGY_PATH` is optional when `agy` is not on `PATH`. `restricted` is the default; `full` passes `--dangerously-skip-permissions` and is not a hard sandbox. Allowed roots validate the worker's cwd, while `--sandbox` is passed best-effort and cannot guarantee containment for every tool or platform.
+The plugin allow-lists these variables for inheritance by its MCP process, so restart Codex and open a new session after changing them. Clients that advertise standard MCP `roots/list` can omit the override; Codex CLI 0.149 does not currently advertise roots. The server accepts only `file://` client roots and never defaults to `${PLUGIN_ROOT}` or `process.cwd`; starts fail closed when neither source exists. `AGY_BRIDGE_AGY_PATH` is optional when `agy` is not on `PATH`. `restricted` is the default; `full` passes `--dangerously-skip-permissions` and is not a hard sandbox. Allowed roots validate the worker's cwd, while `--sandbox` is passed best-effort and cannot guarantee containment for every tool or platform.
 
 ## 1. Prerequisite and model gate
 
@@ -56,17 +56,17 @@ Record:
 - Codex's independent verification;
 - any warnings or manual decisions.
 
-## 4. Bounded BWMI task
+## 4. Bounded repository task
 
-Only after the disposable smoke task passes, use a clean BWMI worktree. Ask the worker to read the root and frontend instructions and make the one agreed ESLint configuration change under `frontend/`. Require `pnpm lint` from `frontend/`, but do not ask it to repair unrelated findings.
+Only after the disposable smoke task passes, use a clean worktree for the target repository. Ask the worker to read that repository's instructions and make one agreed, narrowly scoped change. Require its documented verification command, but do not ask it to repair unrelated findings.
 
-Codex must independently run the documented `frontend/` checks, inspect `git status`, and confirm that no root contract, backend, or unrelated frontend files changed. If another Luna/Terra/Codex worker writes to overlapping paths, stop and surface the overlap instead of merging automatically.
+Codex must independently run the target repository's documented checks, inspect `git status`, and confirm that no unrelated files changed. If another Luna/Terra/Codex worker writes to overlapping paths, stop and surface the overlap instead of merging automatically.
 
 ## 5. Plugin installation check
 
 After runtime tests pass:
 
-1. Run the plugin validator against `plugins/codex-antigravity-bridge`.
+1. Run the plugin validator against `plugins/codexeni`.
 2. Confirm `plugin.json` references `./skills/` and `./.mcp.json`.
 3. Confirm `.mcp.json` resolves `node ${PLUGIN_ROOT}/dist/index.js`.
 4. Install from the repo-local marketplace in a fresh Codex session.
@@ -74,7 +74,7 @@ After runtime tests pass:
 
 Do not publish until a fresh install works without requiring users to build the package and no credential or raw log artifact is included.
 
-The current PoC passed deterministic runtime/packaging checks, local marketplace installation, an authenticated Windows fixture smoke with `agy` 1.1.19 and `gemini-3.7-flash-high`, and Codex's independent fixture verification (3/3 tests). The bounded BWMI proof also installed the missing ESLint flat config and replaced the configuration-load failure with actionable existing lint findings. Repeat the authenticated smoke after installation on every supported platform before treating the integration as production-ready.
+The current PoC passed deterministic runtime/packaging checks, local marketplace installation, an authenticated Windows fixture smoke with `agy` 1.1.19 and `gemini-3.7-flash-high`, and Codex's independent fixture verification (3/3 tests). A bounded repository proof also installed the missing ESLint flat config and replaced a configuration-load failure with actionable existing lint findings. Repeat the authenticated smoke after installation on every supported platform before treating the integration as production-ready.
 
 ## 6. Quota and retry checks
 

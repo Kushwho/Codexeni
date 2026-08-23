@@ -227,7 +227,7 @@ export class WorkspaceGuard {
 
   public async assertAllowed(workspace: string): Promise<string> {
     if (this.configuredRoots.length === 0) {
-      throw new Error("AGY_BRIDGE_ALLOWED_ROOTS is required before starting a task.");
+      throw new Error("No allowed workspace roots are available. This Codex client did not provide MCP roots; set AGY_BRIDGE_ALLOWED_ROOTS before launching Codex.");
     }
     const [canonicalWorkspace, canonicalRoots] = await Promise.all([
       canonicalizeWorkspace(workspace),
@@ -553,7 +553,7 @@ export class AgyBridgeRuntime {
     if (active.length >= this.config.maxConcurrency) throw new Error(`Maximum concurrency (${this.config.maxConcurrency}) reached.`);
 
     const id = this.createId();
-    const folder = await this.mkdtempImpl(join(tmpdir(), "codex-antigravity-bridge-"));
+    const folder = await this.mkdtempImpl(join(tmpdir(), "codexeni-"));
     const record: TaskRecord = {
       id,
       task: input.task,
@@ -965,7 +965,7 @@ export function configureMcpClientRootDiscovery(server: McpServer, runtime: AgyB
 }
 
 export function createMcpServer(runtime = new AgyBridgeRuntime()): McpServer {
-  const server = new McpServer({ name: "codex-antigravity-bridge", version: "0.1.0" });
+  const server = new McpServer({ name: "codexeni", version: "0.1.0" });
   configureMcpClientRootDiscovery(server, runtime);
   server.registerTool("antigravity_health", { description: "Check the local Antigravity CLI bridge without reading credentials.", annotations: { readOnlyHint: true, openWorldHint: false } }, async () => jsonResult(await runtime.health()));
   server.registerTool("antigravity_start_task", { description: "Start an asynchronous Antigravity coding or read-only task. Full mode grants broad local tool access; the allowed-root check selects cwd but is not a security sandbox.", inputSchema: taskInput, annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true } }, async (input) => {

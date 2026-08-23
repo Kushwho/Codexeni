@@ -1,13 +1,13 @@
 {
-  "name": "codex-antigravity-bridge",
-  "version": "0.1.0+codex.20260823144143",
-  "description": "Let Codex delegate bounded coding work to an authenticated local Antigravity CLI session.",
+  "name": "codexeni",
+  "version": "0.1.0+codex.20260823150746",
+  "description": "Codexeni lets Codex delegate bounded coding work to an authenticated local Antigravity CLI session.",
   "author": {
     "name": "Kushwho",
     "url": "https://github.com/Kushwho"
   },
-  "homepage": "https://github.com/Kushwho/codex-antigravity-bridge",
-  "repository": "https://github.com/Kushwho/codex-antigravity-bridge",
+  "homepage": "https://github.com/Kushwho/Codexeni",
+  "repository": "https://github.com/Kushwho/Codexeni",
   "license": "MIT",
   "keywords": [
     "codex",
@@ -18,9 +18,9 @@
   ],
   "skills": "./skills/",
   "interface": {
-    "displayName": "Codex Antigravity Bridge",
+    "displayName": "Codexeni",
     "shortDescription": "Delegate bounded coding tasks to local Antigravity.",
-    "longDescription": "An unofficial bridge for Codex to orchestrate an authenticated local Antigravity CLI session using Gemini 3.7 Flash. Codex remains responsible for approvals, conflict review, and final verification.",
+    "longDescription": "Codexeni is an unofficial bridge for Codex to orchestrate an authenticated local Antigravity CLI session using Gemini 3.7 Flash. Codex remains responsible for approvals, conflict review, and final verification.",
     "developerName": "Kushwho",
     "category": "Productivity",
     "capabilities": [

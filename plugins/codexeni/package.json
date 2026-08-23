@@ -1,9 +1,9 @@
 {
-  "name": "codex-antigravity-bridge",
+  "name": "codexeni",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "MCP bridge that delegates coding tasks to the local Antigravity CLI.",
+  "description": "Codexeni MCP bridge that delegates coding tasks to the local Antigravity CLI.",
   "engines": {
     "node": ">=22"
   },

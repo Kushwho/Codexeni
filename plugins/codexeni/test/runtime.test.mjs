@@ -97,7 +97,7 @@ test("explicit allowed roots override MCP roots; empty and unsupported MCP roots
   assert.equal(unsetRuntime.getAllowedRootSource(), "unconfigured");
   await assert.rejects(
     () => unsetRuntime.startTask({ task: "must fail closed", workspace: envWorkspace.root }),
-    /ALLOWED_ROOTS|required/i,
+    /allowed workspace roots|ALLOWED_ROOTS/i,
   );
 });
 
@@ -185,7 +185,7 @@ test("Agy arguments retain hostile task text as one prompt argument", () => {
 
 test("workspace guard rejects traversal, prefix tricks, and escaping symlinks", async (t) => {
   const { root, nested } = await makeWorkspace();
-  const outside = await mkdtemp(join(tmpdir(), "codex-antigravity-outside-"));
+  const outside = await mkdtemp(join(tmpdir(), "codexeni-outside-"));
   const guard = new bridge.WorkspaceGuard([root]);
   assert.equal(await guard.assertAllowed(nested), await bridge.canonicalizeWorkspace(nested));
   assert.equal(bridge.isPathWithinRoot(join(root, "safe-other"), root), true);

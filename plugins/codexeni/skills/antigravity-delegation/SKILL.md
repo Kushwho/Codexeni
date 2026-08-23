@@ -13,7 +13,7 @@ Before delegating:
 
 1. Explain that Antigravity will be used before the first delegation in a turn. The tool approval is the final start gate.
 2. Call `antigravity_health` once per session. Require the `agy` CLI to be available, authenticated through its normal OAuth flow, and to expose the exact requested Gemini 3.7 Flash model. Do not fall back to another model without asking.
-3. Resolve the allowed workspace roots. If `AGY_BRIDGE_ALLOWED_ROOTS` is set, treat it as the explicit override. Otherwise rely on standard MCP `roots/list` and `roots/list_changed` from the Codex client, accepting only `file://` roots. Use the active Codex workspace plus additional client-supplied roots when available. Never assume `${PLUGIN_ROOT}` or `process.cwd` is a usable root; if no usable roots exist, fail closed and ask the user to set the explicit override.
+3. Resolve the allowed workspace roots. If `AGY_BRIDGE_ALLOWED_ROOTS` is set, treat it as the explicit override. Otherwise rely on standard MCP `roots/list` and `roots/list_changed` from clients that advertise them, accepting only `file://` roots. Codex CLI 0.149 does not advertise roots; for it, ask the user to launch Codex from the target workspace after setting `$env:AGY_BRIDGE_ALLOWED_ROOTS = (Get-Location).Path` (or the POSIX equivalent). Never invent a machine-specific path or assume `${PLUGIN_ROOT}`/`process.cwd` is a usable root; fail closed when neither source exists.
 4. Define one small objective with explicit in-scope paths, allowed commands, expected tests, and a stop condition. Ask a follow-up question if the request is broad, ambiguous, security-sensitive, or would touch credentials, production systems, generated lockfiles, or unrelated repositories.
 5. Read all applicable `AGENTS.md` files and include the relevant constraints in the worker prompt. Tell Antigravity to read them too.
 6. Check the current working tree and record the baseline. Do not delegate when there are unreviewed changes that overlap the requested paths unless the user explicitly accepts that risk.
@@ -71,6 +71,6 @@ When the job ends:
 
 ## Codex final verification
 
-Codex must run the narrowest relevant formatter/typecheck/test/build commands itself after review. Prefer the repository's documented verification command; for BWMI, follow `frontend/AGENTS.md` and run commands from `frontend/`. Verify the expected behavior, not only that the worker reported success. Summarize the worker result, files changed, independent checks, failures, and any follow-up needed.
+Codex must run the narrowest relevant formatter/typecheck/test/build commands itself after review. Prefer the repository's documented verification command and run commands from the directory specified by that repository's instructions. Verify the expected behavior, not only that the worker reported success. Summarize the worker result, files changed, independent checks, failures, and any follow-up needed.
 
 Never expose raw Antigravity logs if they contain paths or sensitive data beyond what the user needs. The bridge is unofficial and does not make Antigravity IDE, Antigravity 2.0, or the Gemini API agent interchangeable with the local `agy` CLI.

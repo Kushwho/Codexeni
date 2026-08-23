@@ -6,11 +6,6 @@ command -v node >/dev/null 2>&1 || {
   exit 1
 }
 
-if [ -z "${AGY_BRIDGE_ALLOWED_ROOTS:-}" ]; then
-  echo "AGY_BRIDGE_ALLOWED_ROOTS is required. Set one or more existing roots before running setup." >&2
-  exit 1
-fi
-
 ANTIGRAVITY_MODEL="${1:-gemini-3.7-flash-high}" \
   node "$(dirname "$0")/check-prerequisites.mjs"
 

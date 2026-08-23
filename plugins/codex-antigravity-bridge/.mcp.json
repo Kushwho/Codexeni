@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "antigravity-bridge": {
-      "command": "node",
-      "args": ["${PLUGIN_ROOT}/dist/index.js"]
-    }
-  }
-}

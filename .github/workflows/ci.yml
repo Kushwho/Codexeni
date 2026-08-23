@@ -1,13 +1,13 @@
-name: Bridge CI
+name: Codexeni CI
 
 on:
   push:
     paths:
-      - "plugins/codex-antigravity-bridge/**"
+      - "plugins/codexeni/**"
       - ".github/workflows/ci.yml"
   pull_request:
     paths:
-      - "plugins/codex-antigravity-bridge/**"
+      - "plugins/codexeni/**"
       - ".github/workflows/ci.yml"
 
 permissions:
@@ -15,7 +15,7 @@ permissions:
 
 defaults:
   run:
-    working-directory: plugins/codex-antigravity-bridge
+    working-directory: plugins/codexeni
 
 jobs:
   test:
@@ -35,7 +35,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: plugins/codex-antigravity-bridge/pnpm-lock.yaml
+          cache-dependency-path: plugins/codexeni/pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

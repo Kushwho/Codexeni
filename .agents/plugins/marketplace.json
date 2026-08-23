@@ -5,10 +5,10 @@
   },
   "plugins": [
     {
-      "name": "codex-antigravity-bridge",
+      "name": "codexeni",
       "source": {
         "source": "local",
-        "path": "./plugins/codex-antigravity-bridge"
+        "path": "./plugins/codexeni"
       },
       "policy": {
         "installation": "AVAILABLE",

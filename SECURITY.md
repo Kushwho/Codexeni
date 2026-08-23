@@ -18,6 +18,6 @@ The setup scripts deliberately check only `agy --version` and `agy models`; they
 
 ## Reporting
 
-For a suspected vulnerability, do not open a public issue with credentials or exploit details. Contact the repository owner through the security contact configured for the future `Kushwho/codex-antigravity-bridge` repository and include a minimal reproduction, affected version, platform, and safe remediation suggestion. Rotate any credential that may have been exposed before reporting.
+For a suspected vulnerability, do not open a public issue with credentials or exploit details. Contact the repository owner through the security contact configured for `Kushwho/Codexeni` and include a minimal reproduction, affected version, platform, and safe remediation suggestion. Rotate any credential that may have been exposed before reporting.
 
 This project is unofficial and not affiliated with Google, Antigravity, Gemini, or OpenAI.
