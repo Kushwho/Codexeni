@@ -6,11 +6,8 @@ on:
       - "plugins/codexeni/**"
       - ".github/workflows/ci.yml"
       - ".github/workflows/guard-main.yml"
-  pull_request:
-    paths:
-      - "plugins/codexeni/**"
-      - ".github/workflows/ci.yml"
-      - ".github/workflows/guard-main.yml"
+  # Branch protection requires the `test` job, so every PR must schedule it.
+  pull_request: {}
 
 permissions:
   contents: read
