@@ -1,0 +1,29 @@
+name: Guard main
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  block-direct-pushes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require an associated pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          count=$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" \
+            | jq 'length')
+          if [ "$count" -eq 0 ]; then
+            echo "::error::Direct pushes to main are not allowed; open a pull request instead."
+            exit 1
+          fi
+          echo "Commit ${{ github.sha }} is associated with $count pull request(s)."

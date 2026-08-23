@@ -2,15 +2,13 @@
 
 Run the stages in order. Keep the fixture and test output outside the production repository, and do not paste authentication output into logs or issues.
 
-Before starting a Codex CLI 0.149 session, configure its workspace root and permission mode. On Windows, separate multiple roots with semicolons:
+Start Codex from the repository you want to work in. No bridge environment variables are required; restricted mode and the current task workspace are the defaults:
 
 ```powershell
-$env:AGY_BRIDGE_ALLOWED_ROOTS = (Get-Location).Path
-$env:AGY_BRIDGE_PERMISSION_MODE = "restricted"
 codex
 ```
 
-The plugin allow-lists these variables for inheritance by its MCP process, so restart Codex and open a new session after changing them. Clients that advertise standard MCP `roots/list` can omit the override; Codex CLI 0.149 does not currently advertise roots. The server accepts only `file://` client roots and never defaults to `${PLUGIN_ROOT}` or `process.cwd`; starts fail closed when neither source exists. `AGY_BRIDGE_AGY_PATH` is optional when `agy` is not on `PATH`. `restricted` is the default; `full` passes `--dangerously-skip-permissions` and is not a hard sandbox. Allowed roots validate the worker's cwd, while `--sandbox` is passed best-effort and cannot guarantee containment for every tool or platform.
+The server prefers optional `AGY_BRIDGE_ALLOWED_ROOTS`, then standard MCP `roots/list`. When neither is available, it canonicalizes the workspace supplied with each task and uses that exact directory as the task boundary. It never substitutes `${PLUGIN_ROOT}` or the MCP server's `process.cwd`. `AGY_BRIDGE_AGY_PATH` is optional when `agy` is not on `PATH`. `restricted` is the default; `full` passes `--dangerously-skip-permissions` and is not a hard sandbox. Workspace checks validate the worker's cwd, while `--sandbox` is passed best-effort and cannot guarantee containment for every tool or platform. Restart Codex after changing any optional environment override.
 
 ## 1. Prerequisite and model gate
 
@@ -30,18 +28,19 @@ If authentication is unavailable, perform the normal interactive OAuth login for
 
 ## 2. Deterministic fixture gate
 
-Build and run the runtime's unit/integration tests. Configure the fake CLI path as the test harness requires and exercise these scenarios:
+Build and run the runtime's unit/integration tests (`pnpm test` from `plugins/codexeni/`). The suite uses an in-process fake spawn; the `fixtures/fake-agy` binary is a manual smoke double. Covered scenarios:
 
 - success with assistant messages and a result event;
 - malformed NDJSON;
 - non-zero CLI exit and stderr;
 - timeout on a slow process;
 - cancellation of a running process;
-- changed-file inventory for Codex's independent scope review;
+- the task-workspace root fallback and explicit-root override behavior;
+- partial-change detection that gates read-only retries;
 - two jobs targeting one workspace, with an overlap warning;
 - argument values containing spaces, quotes, and shell metacharacters.
 
-Pass criteria are structured terminal states, no shell interpolation, bounded event output, and no token-bearing data in results or logs.
+Pass criteria are structured terminal states, no shell interpolation, bounded event output, and no token-bearing data in results or logs. CI additionally verifies that the committed `dist/` bundle matches a fresh build of `src/` and that the GitHub Actions used are pinned to commit SHAs.
 
 ## 3. Real smoke task
 
@@ -74,7 +73,7 @@ After runtime tests pass:
 
 Do not publish until a fresh install works without requiring users to build the package and no credential or raw log artifact is included.
 
-The current PoC passed deterministic runtime/packaging checks, local marketplace installation, an authenticated Windows fixture smoke with `agy` 1.1.19 and `gemini-3.7-flash-high`, and Codex's independent fixture verification (3/3 tests). A bounded repository proof also installed the missing ESLint flat config and replaced a configuration-load failure with actionable existing lint findings. Repeat the authenticated smoke after installation on every supported platform before treating the integration as production-ready.
+Session log (single Windows machine, August 2026 — a lab record, not a repo guarantee; repeat these checks on your own machine): the PoC passed deterministic runtime/packaging checks, local marketplace installation, an authenticated Windows fixture smoke with `agy` 1.1.19 and `gemini-3.7-flash-high`, and Codex's independent fixture verification (3/3 tests). A bounded repository proof also installed the missing ESLint flat config and replaced a configuration-load failure with actionable existing lint findings. Repeat the authenticated smoke after installation on every supported platform before treating the integration as production-ready.
 
 ## 6. Quota and retry checks
 

@@ -11,9 +11,11 @@ Thanks for helping test Codexeni. This is an experimental integration; keep chan
 
 ## Required checks
 
-For runtime changes, run the typecheck, build, and deterministic fake-`agy` tests from `plugins/codexeni/`. For packaging or skill changes, run the plugin validator and inspect the manifest, `.mcp.json`, skill frontmatter, and all referenced paths.
+For runtime changes, run the typecheck, build, and deterministic fake-`agy` tests from `plugins/codexeni/`, then rebuild `dist/` (`pnpm build`) before committing: CI verifies that the committed bundle is byte-identical to a fresh build of `src/`. For packaging or skill changes, run the plugin validator and inspect the manifest, `.mcp.json`, skill frontmatter, and all referenced paths.
 
 For integration experiments, follow the target repository's instructions and run its documented checks from the required working directory. Codex must independently verify any files changed by an Antigravity worker.
+
+All changes to `main` go through pull requests. The `guard-main` workflow blocks direct pushes whose commits are not associated with a merged pull request; also enable GitHub branch protection ("Require a pull request before merging"), which is the real enforcement — the workflow is the in-repo safety net.
 
 ## Pull requests
 

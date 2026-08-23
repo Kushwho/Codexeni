@@ -5,10 +5,12 @@ on:
     paths:
       - "plugins/codexeni/**"
       - ".github/workflows/ci.yml"
+      - ".github/workflows/guard-main.yml"
   pull_request:
     paths:
       - "plugins/codexeni/**"
       - ".github/workflows/ci.yml"
+      - ".github/workflows/guard-main.yml"
 
 permissions:
   contents: read
@@ -23,15 +25,18 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        # actions/checkout v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        # pnpm/action-setup v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
           version: 10
 
       - name: Set up Node.js 22
-        uses: actions/setup-node@v4
+        # actions/setup-node v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
           cache: pnpm
@@ -39,6 +44,11 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Verify committed dist matches source
+        run: |
+          pnpm build
+          git diff --exit-code -- dist/
 
       - name: Typecheck
         run: pnpm typecheck
