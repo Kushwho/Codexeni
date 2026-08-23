@@ -4,9 +4,14 @@ import { mkdtemp } from "node:fs/promises";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 export declare const DEFAULT_MODEL = "gemini-3.7-flash-high";
 export declare const DEFAULT_TIMEOUT_SECONDS = 900;
-export declare const DEFAULT_MAX_CONCURRENCY = 2;
+export declare const DEFAULT_MAX_CONCURRENCY = 4;
+export declare const DEFAULT_READ_ONLY_MAX_RETRIES = 2;
+export declare const MAX_RETRY_AFTER_MS: number;
+export declare const CIRCUIT_BREAKER_MS: number;
 export type PermissionMode = "restricted" | "full";
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "timed_out" | "canceled" | "orphaned";
+export type TaskMode = "coding" | "read_only";
+export type ErrorCategory = "rate_limited" | "quota_exhausted" | "session_limit" | "context_limit" | "authentication" | "upstream_error";
 export interface BridgeConfig {
     executable: string;
     allowedRoots: string[];
@@ -20,6 +25,9 @@ export interface RuntimeDependencies {
     spawnImpl?: SpawnFunction;
     stopChildImpl?: StopChildFunction;
     now?: () => Date;
+    randomImpl?: () => number;
+    setTimeoutImpl?: (callback: () => void, delay: number) => NodeJS.Timeout;
+    clearTimeoutImpl?: (timeout: NodeJS.Timeout) => void;
     mkdtempImpl?: typeof mkdtemp;
     randomUUIDImpl?: () => string;
 }
@@ -41,6 +49,12 @@ export interface FileChanges {
     deleted: string[];
     truncated: boolean;
 }
+export interface ModelCircuitBreaker {
+    model: string;
+    category: "rate_limited" | "quota_exhausted";
+    openedAt: string;
+    blockedUntil: string;
+}
 export interface TaskRecord {
     id: string;
     task: string;
@@ -49,6 +63,13 @@ export interface TaskRecord {
     effort: "low" | "medium" | "high";
     timeoutSeconds: number;
     permissionMode: PermissionMode;
+    taskMode: TaskMode;
+    maxRetries: number;
+    retryCount: number;
+    nextRetryAt?: string;
+    blockedUntil?: string;
+    errorCategory?: ErrorCategory;
+    retryable: boolean;
     status: JobStatus;
     createdAt: string;
     startedAt?: string;
@@ -65,8 +86,10 @@ export interface TaskRecord {
     events: StreamEvent[];
     warnings: string[];
     fileChanges?: FileChanges;
+    partialChanges?: FileChanges;
     child?: ChildProcess;
     timeoutHandle?: NodeJS.Timeout;
+    retryHandle?: NodeJS.Timeout;
     beforeSnapshot?: WorkspaceSnapshot;
     cancellationRequested?: boolean;
     forcedTerminalStatus?: "timed_out" | "canceled";
@@ -89,8 +112,9 @@ export declare function buildAgyArgs(input: {
     model: string;
     effort: "low" | "medium" | "high";
     permissionMode: PermissionMode;
+    taskMode?: TaskMode;
 }): string[];
-export declare function buildDelegationPrompt(task: string, workspace?: string): string;
+export declare function buildDelegationPrompt(task: string, workspace?: string, taskMode?: TaskMode): string;
 /** Parse one child-output line; malformed output is preserved as text rather than fatal. */
 export declare function parseNdjsonLine(line: string, timestamp?: string): StreamEvent | undefined;
 export declare function snapshotWorkspace(workspace: string, maxEntries?: number): Promise<{
@@ -98,13 +122,21 @@ export declare function snapshotWorkspace(workspace: string, maxEntries?: number
     truncated: boolean;
 }>;
 export declare function diffSnapshots(before: WorkspaceSnapshot, after: WorkspaceSnapshot, truncated?: boolean): FileChanges;
+/** Classify provider failures without relying on a single unstable CLI schema. */
+export declare function classifyFailure(value: unknown): ErrorCategory | undefined;
+/** Returns a provider-directed wait when present, including reset timestamps. */
+export declare function parseRetryAfterMs(value: unknown, now?: number): number | undefined;
 export declare class AgyBridgeRuntime {
     readonly config: BridgeConfig;
     readonly jobs: Map<string, TaskRecord>;
+    readonly breakers: Map<string, ModelCircuitBreaker>;
     private readonly guard;
     private readonly spawnImpl;
     private readonly stopChildImpl;
     private readonly now;
+    private readonly random;
+    private readonly scheduleTimeout;
+    private readonly cancelTimeout;
     private readonly mkdtempImpl;
     private readonly createId;
     constructor(dependencies?: RuntimeDependencies);
@@ -115,6 +147,8 @@ export declare class AgyBridgeRuntime {
         effort?: "low" | "medium" | "high";
         timeoutSeconds?: number;
         model?: string;
+        taskMode?: TaskMode;
+        maxRetries?: number;
     }): Promise<Record<string, unknown>>;
     getTask(jobId: string, eventLimit?: number): Record<string, unknown>;
     cancelTask(jobId: string): Promise<Record<string, unknown>>;
@@ -123,6 +157,13 @@ export declare class AgyBridgeRuntime {
     private captureStream;
     private recordEvent;
     private finalize;
+    private applyFailurePolicy;
+    private classifyAndOpenCircuit;
+    private prepareRetryLaunch;
+    private backoffMs;
+    private openCircuit;
+    private expireBreakers;
+    private assertModelAvailable;
     private capture;
 }
 export declare function extractModelSlugs(output: string): string[];

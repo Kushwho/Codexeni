@@ -75,3 +75,16 @@ After runtime tests pass:
 Do not publish until a fresh install works without requiring users to build the package and no credential or raw log artifact is included.
 
 The current PoC passed deterministic runtime/packaging checks, local marketplace installation, an authenticated Windows fixture smoke with `agy` 1.1.19 and `gemini-3.7-flash-high`, and Codex's independent fixture verification (3/3 tests). The bounded BWMI proof also installed the missing ESLint flat config and replaced the configuration-load failure with actionable existing lint findings. Repeat the authenticated smoke after installation on every supported platform before treating the integration as production-ready.
+
+## 6. Quota and retry checks
+
+The bridge allows up to four concurrent jobs locally; this is not a provider quota. Do not use it to infer account capacity. Flash and Pro draw from shared visible five-hour and weekly usage buckets. When the official Antigravity `/usage` surface is available, use it as the source of account state.
+
+Exercise the policy with a test double or documented provider response:
+
+1. Classify `429` as quota/rate-limit pressure; check `/usage` and do not switch model/account or consume paid/G1 credits.
+2. Classify session/disconnect, context, and authentication failures separately and report the required manual repair.
+3. Confirm coding tasks use `taskMode: "coding"` and `maxRetries: 0`; they never auto-retry.
+4. Confirm a no-change `taskMode: "read_only"` task can retry at most twice, bounded, with the same model/account.
+5. Confirm the per-model circuit breaker blocks further attempts after a rate/quota failure until its reported cooldown expires, and that health exposes the active breaker.
+6. If a coding task partially changes files, inspect the diff and run tests before considering a Luna/Terra fallback. Never retry or fall back over an unreviewed partial workspace.

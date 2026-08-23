@@ -21431,7 +21431,10 @@ var StdioServerTransport = class {
 // src/index.ts
 var DEFAULT_MODEL = "gemini-3.7-flash-high";
 var DEFAULT_TIMEOUT_SECONDS = 900;
-var DEFAULT_MAX_CONCURRENCY = 2;
+var DEFAULT_MAX_CONCURRENCY = 4;
+var DEFAULT_READ_ONLY_MAX_RETRIES = 2;
+var MAX_RETRY_AFTER_MS = 5 * 60 * 1e3;
+var CIRCUIT_BREAKER_MS = 5 * 60 * 1e3;
 var MAX_EVENTS = 200;
 var MAX_EVENT_CHARS = 8e3;
 var EXCLUDED_SNAPSHOT_DIRECTORIES = /* @__PURE__ */ new Set([".git", "node_modules", ".next", ".pnpm-store", "dist", "build", ".cache", "coverage", "test-results"]);
@@ -21490,10 +21493,10 @@ var WorkspaceGuard = class {
 function buildAgyArgs(input) {
   const args = ["--model", input.model, "--output-format", "stream-json", "--effort", input.effort, "--sandbox"];
   if (input.permissionMode === "full") args.push("--dangerously-skip-permissions");
-  args.push("--prompt", buildDelegationPrompt(input.task, input.workspace));
+  args.push("--prompt", buildDelegationPrompt(input.task, input.workspace, input.taskMode));
   return args;
 }
-function buildDelegationPrompt(task, workspace) {
+function buildDelegationPrompt(task, workspace, taskMode) {
   if (!workspace) return task;
   return [
     "You are a bounded external coding worker.",
@@ -21501,6 +21504,7 @@ function buildDelegationPrompt(task, workspace) {
     "Treat that directory as the entire project. Start by inspecting '.' relative to the current working directory.",
     "Do not search, read, write, or run commands outside this workspace.",
     "Do not inspect credentials, tokens, browser data, keyrings, or user-profile configuration.",
+    ...taskMode === "read_only" ? ["This is a read-only task: do not modify files or run commands that change workspace state."] : [],
     "Complete only the task below, run its requested checks, and report changed files and results.",
     "",
     "TASK:",
@@ -21560,6 +21564,68 @@ function diffSnapshots(before, after, truncated = false) {
 function redactPotentialSecrets(value) {
   return value.replace(/(api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)\s*[:=]\s*[^\s,;]+/gi, "$1=[redacted]").slice(-8e3);
 }
+function classifyFailure(value) {
+  const text = typeof value === "string" ? value : JSON.stringify(value ?? "");
+  const normalized = text.toLowerCase();
+  if (/(?:unauthenticated|not authenticated|login required|session expired|invalid (?:auth|credential)|authentication failed)/.test(normalized)) return "authentication";
+  if (/(?:session limit|too many sessions|concurrent sessions|session[_ -]?limit)/.test(normalized)) return "session_limit";
+  if (/(?:context limit|context window|token limit|maximum (?:context|tokens)|too many tokens|prompt is too long)/.test(normalized)) return "context_limit";
+  if (/(?:quota (?:exceeded|exhausted)|quota_exhausted|out of credits|credits? exhausted|resource[_ -]?exhausted)/.test(normalized)) return "quota_exhausted";
+  if (/(?:\b429\b|http[_ ]?429|rate[ _-]?limit(?:ed)?|too many requests|resource exhausted)/.test(normalized)) return "rate_limited";
+  if (/(?:\b5\d\d\b|upstream|service unavailable|internal error|network error|connection (?:reset|refused|timed out))/i.test(normalized)) return "upstream_error";
+  return void 0;
+}
+function parseRetryAfterMs(value, now = Date.now()) {
+  const fromStructuredValue = (candidate, depth = 0) => {
+    if (!candidate || typeof candidate !== "object" || depth > 8) return void 0;
+    for (const [key, item] of Object.entries(candidate)) {
+      const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (normalizedKey === "retryafterms" && (typeof item === "number" || typeof item === "string")) {
+        const milliseconds2 = Number(item);
+        if (Number.isFinite(milliseconds2)) return Math.max(0, Math.round(milliseconds2));
+      }
+      if (normalizedKey === "retryafter" && (typeof item === "number" || typeof item === "string")) {
+        const seconds2 = Number(item);
+        if (Number.isFinite(seconds2)) return Math.max(0, Math.round(seconds2 * 1e3));
+        const timestamp = Date.parse(String(item));
+        if (Number.isFinite(timestamp)) return Math.max(0, timestamp - now);
+      }
+      if (["reset", "resetat", "retryat", "blockeduntil"].includes(normalizedKey) && typeof item === "string") {
+        const timestamp = Date.parse(item);
+        if (Number.isFinite(timestamp)) return Math.max(0, timestamp - now);
+      }
+      const nested = fromStructuredValue(item, depth + 1);
+      if (nested !== void 0) return nested;
+    }
+    return void 0;
+  };
+  const structured = fromStructuredValue(value);
+  if (structured !== void 0) return structured;
+  const text = typeof value === "string" ? value : JSON.stringify(value ?? "");
+  const seconds = /retry(?:-|_)?after\s*[:=]?\s*(\d+(?:\.\d+)?)\s*(?:s|sec|seconds)?\b/i.exec(text);
+  if (seconds) return Math.max(0, Math.round(Number(seconds[1]) * 1e3));
+  const milliseconds = /retry(?:-|_)?after(?:_ms|\s*ms)\s*[:=]?\s*(\d+(?:\.\d+)?)/i.exec(text);
+  if (milliseconds) return Math.max(0, Math.round(Number(milliseconds[1])));
+  const retryDate = /retry(?:-|_)?after\s*[:=]\s*["']?(\d{4}-\d\d-\d\dT[^"'\s,}]+)/i.exec(text);
+  if (retryDate) {
+    const retryTime = Date.parse(retryDate[1]);
+    if (Number.isFinite(retryTime)) return Math.max(0, retryTime - now);
+  }
+  const httpDate = /retry(?:-|_)?after\s*:\s*([^\r\n]+)/i.exec(text);
+  if (httpDate) {
+    const retryTime = Date.parse(httpDate[1].trim().replace(/^['"]|['"]$/g, ""));
+    if (Number.isFinite(retryTime)) return Math.max(0, retryTime - now);
+  }
+  const reset = /(?:reset(?:[_ -]?at)?|retry[_ -]?at|blocked[_ -]?until)\s*[:=]?\s*["']?([^"'\s,}]+)/i.exec(text);
+  if (reset) {
+    const resetTime = Date.parse(reset[1]);
+    if (Number.isFinite(resetTime)) return Math.max(0, resetTime - now);
+  }
+  return void 0;
+}
+function hasWorkspaceChanges(changes) {
+  return Boolean(changes && (changes.created.length || changes.modified.length || changes.deleted.length));
+}
 var SENSITIVE_FIELD_NAME = /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|password|secret|cookie)/i;
 function sanitizeEventData(value, depth = 0) {
   if (depth > 8) return "[truncated]";
@@ -21597,6 +21663,13 @@ function compactRecord(record2, eventLimit) {
     model: record2.model,
     effort: record2.effort,
     permissionMode: record2.permissionMode,
+    taskMode: record2.taskMode,
+    retryable: record2.retryable,
+    retryCount: record2.retryCount,
+    maxRetries: record2.maxRetries,
+    nextRetryAt: record2.nextRetryAt,
+    blockedUntil: record2.blockedUntil,
+    errorCategory: record2.errorCategory,
     createdAt: record2.createdAt,
     startedAt: record2.startedAt,
     finishedAt: record2.finishedAt,
@@ -21612,6 +21685,8 @@ function compactRecord(record2, eventLimit) {
     logPath: record2.logPath,
     warnings: record2.warnings,
     fileChanges: record2.fileChanges,
+    partialChanges: record2.partialChanges,
+    hasPartialChanges: Boolean(record2.partialChanges && (record2.partialChanges.created.length || record2.partialChanges.modified.length || record2.partialChanges.deleted.length)),
     events: record2.events.slice(-eventLimit)
   };
 }
@@ -21643,22 +21718,31 @@ async function stopChildProcess(child) {
 var AgyBridgeRuntime = class {
   config;
   jobs = /* @__PURE__ */ new Map();
+  breakers = /* @__PURE__ */ new Map();
   guard;
   spawnImpl;
   stopChildImpl;
   now;
+  random;
+  scheduleTimeout;
+  cancelTimeout;
   mkdtempImpl;
   createId;
   constructor(dependencies = {}) {
-    this.config = dependencies.config ?? resolveBridgeConfig();
+    const provided = dependencies.config ?? resolveBridgeConfig();
+    this.config = { ...provided, maxConcurrency: Math.min(Math.max(1, provided.maxConcurrency), DEFAULT_MAX_CONCURRENCY) };
     this.guard = new WorkspaceGuard(this.config.allowedRoots);
     this.spawnImpl = dependencies.spawnImpl ?? nodeSpawn;
     this.stopChildImpl = dependencies.stopChildImpl ?? stopChildProcess;
     this.now = dependencies.now ?? (() => /* @__PURE__ */ new Date());
+    this.random = dependencies.randomImpl ?? Math.random;
+    this.scheduleTimeout = dependencies.setTimeoutImpl ?? ((callback, delay) => setTimeout(callback, delay));
+    this.cancelTimeout = dependencies.clearTimeoutImpl ?? ((timeout) => clearTimeout(timeout));
     this.mkdtempImpl = dependencies.mkdtempImpl ?? mkdtemp;
     this.createId = dependencies.randomUUIDImpl ?? randomUUID;
   }
   async health() {
+    this.expireBreakers();
     const canonicalRoots = await Promise.all(this.config.allowedRoots.map(async (root) => {
       try {
         return { configured: root, canonical: await canonicalizeWorkspace(root) };
@@ -21677,6 +21761,7 @@ var AgyBridgeRuntime = class {
       permissionMode: this.config.permissionMode,
       defaultModel: this.config.defaultModel,
       maxConcurrency: this.config.maxConcurrency,
+      circuitBreakers: [...this.breakers.values()],
       models: models.ok ? extractModelSlugs(models.stdout) : [],
       modelProbeError: models.ok ? void 0 : models.error,
       activeJobs: [...this.jobs.values()].filter((job) => job.status === "running" || job.status === "queued").length
@@ -21688,6 +21773,13 @@ var AgyBridgeRuntime = class {
     if (input.timeoutSeconds !== void 0 && (!Number.isSafeInteger(input.timeoutSeconds) || input.timeoutSeconds <= 0 || input.timeoutSeconds > this.config.defaultTimeoutSeconds)) {
       throw new Error(`timeoutSeconds must be a positive integer no greater than ${this.config.defaultTimeoutSeconds}.`);
     }
+    if (input.maxRetries !== void 0 && (!Number.isSafeInteger(input.maxRetries) || input.maxRetries < 0 || input.maxRetries > DEFAULT_READ_ONLY_MAX_RETRIES)) {
+      throw new Error(`maxRetries must be an integer from 0 to ${DEFAULT_READ_ONLY_MAX_RETRIES}.`);
+    }
+    const taskMode = input.taskMode ?? "coding";
+    if (taskMode !== "coding" && taskMode !== "read_only") throw new Error("taskMode must be either coding or read_only.");
+    const model = input.model ?? this.config.defaultModel;
+    this.assertModelAvailable(model);
     const workspace = await this.guard.assertAllowed(input.workspace);
     const active = [...this.jobs.values()].filter((job) => job.status === "running" || job.status === "queued");
     if (active.length >= this.config.maxConcurrency) throw new Error(`Maximum concurrency (${this.config.maxConcurrency}) reached.`);
@@ -21697,10 +21789,14 @@ var AgyBridgeRuntime = class {
       id,
       task: input.task,
       workspace,
-      model: input.model ?? this.config.defaultModel,
+      model,
       effort: input.effort ?? "high",
       timeoutSeconds: Math.min(input.timeoutSeconds ?? this.config.defaultTimeoutSeconds, this.config.defaultTimeoutSeconds),
       permissionMode: this.config.permissionMode,
+      taskMode,
+      maxRetries: taskMode === "read_only" ? input.maxRetries ?? DEFAULT_READ_ONLY_MAX_RETRIES : 0,
+      retryCount: 0,
+      retryable: false,
       status: "queued",
       createdAt: this.now().toISOString(),
       stderrSummary: "",
@@ -21719,7 +21815,7 @@ var AgyBridgeRuntime = class {
       record2.finishedAt = this.now().toISOString();
       record2.stderrSummary = error2 instanceof Error ? error2.message : String(error2);
     }
-    return { jobId: id, status: record2.status, warnings: record2.warnings, workspace, model: record2.model };
+    return { jobId: id, status: record2.status, warnings: record2.warnings, workspace, model: record2.model, taskMode: record2.taskMode, maxRetries: record2.maxRetries };
   }
   getTask(jobId, eventLimit = 50) {
     const record2 = this.jobs.get(jobId);
@@ -21729,6 +21825,15 @@ var AgyBridgeRuntime = class {
   async cancelTask(jobId) {
     const record2 = this.jobs.get(jobId);
     if (!record2) throw new Error(`Unknown job ID: ${jobId}`);
+    if (record2.status === "queued" && record2.retryHandle) {
+      this.cancelTimeout(record2.retryHandle);
+      record2.retryHandle = void 0;
+      record2.nextRetryAt = void 0;
+      record2.forcedTerminalStatus = "canceled";
+      record2.status = "canceled";
+      record2.finishedAt = this.now().toISOString();
+      return { jobId, status: record2.status, canceled: true };
+    }
     if (!record2.child || record2.status !== "running") return { jobId, status: record2.status, canceled: false };
     record2.cancellationRequested = true;
     record2.forcedTerminalStatus = "canceled";
@@ -21736,12 +21841,25 @@ var AgyBridgeRuntime = class {
     return { jobId, status: record2.status, canceled: true };
   }
   async shutdown() {
+    for (const job of this.jobs.values()) {
+      if (job.retryHandle) {
+        this.cancelTimeout(job.retryHandle);
+        job.retryHandle = void 0;
+        job.status = "orphaned";
+        job.finishedAt = this.now().toISOString();
+      }
+    }
     await Promise.all([...this.jobs.values()].filter((job) => job.status === "running" && job.child).map(async (job) => {
       job.cancellationRequested = true;
       await this.stopChildImpl(job.child);
     }));
   }
   launch(record2) {
+    record2.nextRetryAt = void 0;
+    record2.blockedUntil = void 0;
+    record2.conversationId = void 0;
+    record2.upstreamStatus = void 0;
+    record2.response = void 0;
     const args = buildAgyArgs(record2);
     let child;
     try {
@@ -21753,8 +21871,9 @@ var AgyBridgeRuntime = class {
     record2.child = child;
     record2.pid = child.pid;
     record2.status = "running";
+    record2.finishedAt = void 0;
     record2.startedAt = this.now().toISOString();
-    record2.timeoutHandle = setTimeout(() => {
+    record2.timeoutHandle = this.scheduleTimeout(() => {
       if (record2.status === "running") {
         record2.cancellationRequested = true;
         record2.forcedTerminalStatus = "timed_out";
@@ -21809,23 +21928,133 @@ ${sanitized}`);
   async finalize(record2, status, detail) {
     if (record2.finalizing || ["succeeded", "failed", "timed_out", "canceled"].includes(record2.status)) return;
     record2.finalizing = true;
-    if (record2.timeoutHandle) clearTimeout(record2.timeoutHandle);
-    record2.status = status;
-    record2.finishedAt = this.now().toISOString();
+    if (record2.timeoutHandle) this.cancelTimeout(record2.timeoutHandle);
     if (detail) record2.stderrSummary = redactPotentialSecrets(`${record2.stderrSummary}
 ${detail}`);
+    const retryAfterMs = status === "failed" || status === "timed_out" ? this.classifyAndOpenCircuit(record2) : void 0;
     try {
       if (record2.beforeSnapshot) {
         const after = await snapshotWorkspace(record2.workspace);
         record2.fileChanges = diffSnapshots(record2.beforeSnapshot, after.snapshot, after.truncated);
+        record2.partialChanges = status === "failed" || status === "timed_out" ? record2.fileChanges : void 0;
         if (after.truncated) record2.warnings.push("Post-task file snapshot reached its entry limit; change detection is partial.");
       }
     } catch (error2) {
       record2.warnings.push(`Could not collect changed files: ${error2 instanceof Error ? error2.message : String(error2)}`);
     } finally {
       record2.child = void 0;
+      record2.status = status;
+      record2.finishedAt = this.now().toISOString();
       record2.finalizing = false;
+      if (status === "succeeded") {
+        this.breakers.delete(record2.model);
+        record2.errorCategory = void 0;
+        record2.retryable = false;
+        record2.nextRetryAt = void 0;
+        record2.blockedUntil = void 0;
+      } else {
+        this.applyFailurePolicy(record2, retryAfterMs);
+      }
     }
+  }
+  applyFailurePolicy(record2, classifiedRetryAfterMs) {
+    if (record2.status !== "failed" && record2.status !== "timed_out") return;
+    const explicitRetryAfterMs = classifiedRetryAfterMs;
+    const fallbackDelay = explicitRetryAfterMs === void 0 ? this.backoffMs(record2.retryCount) : void 0;
+    const categoryCanRetry = record2.errorCategory === "rate_limited" || record2.errorCategory === "session_limit" || record2.errorCategory === "upstream_error";
+    const noChanges = Boolean(record2.partialChanges && !record2.partialChanges.truncated && !hasWorkspaceChanges(record2.partialChanges));
+    record2.retryable = record2.taskMode === "read_only" && categoryCanRetry && noChanges && record2.retryCount < record2.maxRetries;
+    if (!record2.retryable) return;
+    if (explicitRetryAfterMs !== void 0 && explicitRetryAfterMs > MAX_RETRY_AFTER_MS) {
+      const retryAt = new Date(this.now().getTime() + explicitRetryAfterMs).toISOString();
+      record2.nextRetryAt = retryAt;
+      record2.blockedUntil = retryAt;
+      record2.retryable = false;
+      record2.warnings.push("Provider retry window exceeds five minutes; no automatic retry was scheduled.");
+      return;
+    }
+    const delay = explicitRetryAfterMs ?? fallbackDelay;
+    record2.retryCount += 1;
+    record2.nextRetryAt = new Date(this.now().getTime() + delay).toISOString();
+    record2.cancellationRequested = false;
+    record2.forcedTerminalStatus = void 0;
+    record2.status = "queued";
+    record2.retryHandle = this.scheduleTimeout(() => {
+      record2.retryHandle = void 0;
+      if (record2.status !== "queued" || record2.cancellationRequested) return;
+      void this.prepareRetryLaunch(record2);
+    }, delay);
+  }
+  classifyAndOpenCircuit(record2) {
+    const failureContext = [record2.stderrSummary, record2.response, record2.upstreamStatus, ...record2.events.map((event) => event.data)];
+    record2.errorCategory = classifyFailure(failureContext) ?? "upstream_error";
+    const retryAfterMs = parseRetryAfterMs(failureContext, this.now().getTime());
+    if (record2.errorCategory === "rate_limited" || record2.errorCategory === "quota_exhausted") {
+      this.openCircuit(record2.model, record2.errorCategory, retryAfterMs);
+      const breaker = this.breakers.get(record2.model);
+      if (breaker) record2.blockedUntil = breaker.blockedUntil;
+    }
+    return retryAfterMs;
+  }
+  async prepareRetryLaunch(record2) {
+    try {
+      const snapshot = await snapshotWorkspace(record2.workspace);
+      record2.beforeSnapshot = snapshot.snapshot;
+      if (snapshot.truncated) record2.warnings.push("Retry pre-task file snapshot reached its entry limit; change detection is partial.");
+      record2.stderrSummary = "";
+      record2.events = [];
+      record2.conversationId = void 0;
+      record2.response = void 0;
+      record2.usage = void 0;
+      record2.upstreamStatus = void 0;
+      record2.startedAt = void 0;
+      record2.finishedAt = void 0;
+      record2.pid = void 0;
+      record2.exitCode = void 0;
+      record2.signal = void 0;
+      record2.timeoutHandle = void 0;
+      record2.forcedTerminalStatus = void 0;
+      record2.cancellationRequested = false;
+      record2.fileChanges = void 0;
+      record2.partialChanges = void 0;
+      record2.errorCategory = void 0;
+      record2.retryable = false;
+      record2.nextRetryAt = void 0;
+      this.launch(record2);
+    } catch (error2) {
+      record2.status = "failed";
+      record2.finishedAt = this.now().toISOString();
+      record2.stderrSummary = redactPotentialSecrets(`${record2.stderrSummary}
+Retry setup failed: ${error2 instanceof Error ? error2.message : String(error2)}`);
+      record2.errorCategory = "upstream_error";
+      record2.retryable = false;
+    }
+  }
+  backoffMs(retryCount) {
+    const base = Math.min(15e3 * 2 ** retryCount, 12e4);
+    const jitter = Math.floor(Math.min(Math.max(this.random(), 0), 1) * 5e3);
+    return Math.min(base + jitter, MAX_RETRY_AFTER_MS);
+  }
+  openCircuit(model, category, retryAfterMs) {
+    const now = this.now();
+    const delay = retryAfterMs === void 0 ? CIRCUIT_BREAKER_MS : Math.max(retryAfterMs, 1e3);
+    const candidate = {
+      model,
+      category,
+      openedAt: now.toISOString(),
+      blockedUntil: new Date(now.getTime() + delay).toISOString()
+    };
+    const existing = this.breakers.get(model);
+    if (!existing || Date.parse(existing.blockedUntil) < Date.parse(candidate.blockedUntil)) this.breakers.set(model, candidate);
+  }
+  expireBreakers() {
+    const now = this.now().getTime();
+    for (const [model, breaker] of this.breakers) if (Date.parse(breaker.blockedUntil) <= now) this.breakers.delete(model);
+  }
+  assertModelAvailable(model) {
+    this.expireBreakers();
+    const breaker = this.breakers.get(model);
+    if (breaker) throw new Error(`Model ${model} is temporarily blocked after ${breaker.category} until ${breaker.blockedUntil}. Choose a later time; this bridge will not switch models or accounts automatically.`);
   }
   capture(args) {
     return new Promise((done) => {
@@ -21876,13 +22105,15 @@ var taskInput = {
   workspace: external_exports.string().min(1),
   effort: external_exports.enum(["low", "medium", "high"]).optional(),
   timeoutSeconds: external_exports.number().int().positive().max(DEFAULT_TIMEOUT_SECONDS).optional(),
-  model: external_exports.string().min(1).max(200).optional()
+  model: external_exports.string().min(1).max(200).optional(),
+  taskMode: external_exports.enum(["coding", "read_only"]).optional(),
+  maxRetries: external_exports.number().int().min(0).max(DEFAULT_READ_ONLY_MAX_RETRIES).optional()
 };
 var jsonResult = (payload, isError = false) => ({ content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], structuredContent: payload, isError });
 function createMcpServer(runtime = new AgyBridgeRuntime()) {
   const server = new McpServer({ name: "codex-antigravity-bridge", version: "0.1.0" });
   server.registerTool("antigravity_health", { description: "Check the local Antigravity CLI bridge without reading credentials.", annotations: { readOnlyHint: true, openWorldHint: false } }, async () => jsonResult(await runtime.health()));
-  server.registerTool("antigravity_start_task", { description: "Start an asynchronous Antigravity coding task. Full mode grants broad local tool access; the allowed-root check selects cwd but is not a security sandbox.", inputSchema: taskInput, annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true } }, async (input) => {
+  server.registerTool("antigravity_start_task", { description: "Start an asynchronous Antigravity coding or read-only task. Full mode grants broad local tool access; the allowed-root check selects cwd but is not a security sandbox.", inputSchema: taskInput, annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true } }, async (input) => {
     try {
       return jsonResult(await runtime.startTask(input));
     } catch (error2) {
@@ -21920,19 +22151,24 @@ if (process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(proce
 }
 export {
   AgyBridgeRuntime,
+  CIRCUIT_BREAKER_MS,
   DEFAULT_MAX_CONCURRENCY,
   DEFAULT_MODEL,
+  DEFAULT_READ_ONLY_MAX_RETRIES,
   DEFAULT_TIMEOUT_SECONDS,
+  MAX_RETRY_AFTER_MS,
   WorkspaceGuard,
   buildAgyArgs,
   buildDelegationPrompt,
   canonicalizeWorkspace,
+  classifyFailure,
   createMcpServer,
   diffSnapshots,
   extractModelSlugs,
   isPathWithinRoot,
   parseAuthenticationStatus,
   parseNdjsonLine,
+  parseRetryAfterMs,
   resolveBridgeConfig,
   runStdioServer,
   snapshotWorkspace

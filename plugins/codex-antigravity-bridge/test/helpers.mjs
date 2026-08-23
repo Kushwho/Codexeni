@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
+import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -28,6 +29,7 @@ export function createFakeSpawn(scenarios = []) {
       return true;
     };
     calls.push({ command, args, options, child });
+    scenario.onSpawn?.({ command, args, options, child, calls });
     queueMicrotask(() => {
       if (scenario.stdout) child.stdout.write(scenario.stdout);
       if (scenario.stderr) child.stderr.write(scenario.stderr);
@@ -41,6 +43,32 @@ export function createFakeSpawn(scenarios = []) {
     return child;
   };
   return { spawnImpl, calls };
+}
+
+/** Synchronously mutate a workspace from a fake child spawn between snapshots. */
+export function writeOnSpawn(file, contents) {
+  return () => writeFileSync(file, contents, "utf8");
+}
+
+/** Manual timer queue for retry/circuit tests; it never waits on wall-clock time. */
+export function createManualTimers() {
+  let sequence = 0;
+  const handles = [];
+  const setTimeoutImpl = (callback, delay) => {
+    const handle = { id: ++sequence, callback, delay, canceled: false };
+    handles.push(handle);
+    return handle;
+  };
+  const clearTimeoutImpl = (handle) => { if (handle) handle.canceled = true; };
+  const pending = () => handles.filter((handle) => !handle.canceled);
+  const runNext = (predicate = () => true) => {
+    const handle = pending().find(predicate);
+    if (!handle) throw new Error("No matching fake timer is pending");
+    handle.canceled = true;
+    handle.callback();
+    return handle;
+  };
+  return { setTimeoutImpl, clearTimeoutImpl, pending, runNext };
 }
 
 export async function makeWorkspace(prefix = "codex-antigravity-bridge-") {

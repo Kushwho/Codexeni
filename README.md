@@ -60,6 +60,7 @@ Configuration:
 - `AGY_BRIDGE_ALLOWED_ROOTS` — mandatory, path-delimited roots. The bridge canonicalizes the requested workspace and validates that its current working directory is within one of these roots.
 - `AGY_BRIDGE_PERMISSION_MODE` — `restricted` by default; set `full` only when the user accepts broad worker permissions. In full mode the bridge passes `--dangerously-skip-permissions` to `agy`.
 - `AGY_BRIDGE_AGY_PATH` — optional absolute path to `agy` when it is not on `PATH` (for example, `C:\Users\Kushal\AppData\Local\agy\bin\agy.exe`).
+- `AGY_BRIDGE_MAX_CONCURRENCY` — optional local job ceiling from 1 through 4; defaults to 4. This does not represent or increase provider quota.
 
 Allowed roots are a workspace-selection guard, not a hard containment boundary. In full mode, Antigravity may still reach outside the selected root through its tools. The bridge passes `--sandbox` best-effort, but that flag is not a guaranteed filesystem sandbox for every tool or platform. Use a clean branch or disposable worktree and review every diff.
 
@@ -96,15 +97,30 @@ Use the plugin skill for bounded work. A safe first request is a read-only revie
 The PoC exposes the following workflow:
 
 - `antigravity_health` — inspect CLI/model readiness without returning credentials.
-- `antigravity_start_task` — start one bounded worker job in an allowed workspace.
+- `antigravity_start_task` — start one bounded worker job in an allowed workspace. The input contract includes `taskMode` (`coding` or `read_only`) and `maxRetries`; coding tasks must use `maxRetries: 0`.
 - `antigravity_get_task` — poll a job and retrieve a bounded event tail, result, and change summary.
 - `antigravity_cancel_task` — terminate a running job by its bridge job ID.
 
 An Antigravity coding task may execute commands and modify files, so review the task prompt, workspace, and permission mode before starting it. Codex remains responsible for reviewing the worker's diff and independently running verification.
 
+### Quota, retry, and fallback policy
+
+The bridge permits up to four concurrent jobs as a local process ceiling. This is not a published Antigravity or Google concurrency quota, and it does not increase the account's provider allowance. Simultaneous jobs targeting the same workspace remain unsafe because their writes can overlap.
+
+Gemini Flash and Pro usage is reported through shared, account-visible five-hour and weekly buckets. Treat the official Antigravity `/usage` surface as the source of account state; do not infer quota from bridge job count, local logs, or model names. A provider `429` is classified as quota/rate-limit pressure and should trigger a usage check, not an account or model switch. Google’s [Antigravity CLI codelab](https://codelabs.developers.google.com/sdd-agy-cli) likewise directs users to `/usage` when quota is encountered.
+
+Classify failures before deciding what to do:
+
+- `429`, quota, or rate-limit responses: usage/quota pressure; coding tasks never auto-retry.
+- Session/disconnect failures: worker session state is unavailable; repair or restart the session manually.
+- Context failures: the task is too large for the worker context; reduce scope or prompt size manually.
+- Authentication failures: OAuth or account state needs manual repair; never copy tokens into prompts or logs.
+
+Only no-change `read_only` tasks may use bounded automatic retries, with at most two retries and the same model/account. Coding tasks never auto-retry, and no task automatically switches model or account, buys paid capacity, or consumes G1 credits. A per-model circuit breaker stops new attempts after a rate/quota failure until its reported cooldown expires; `antigravity_health` exposes active breakers. If a coding task made partial changes, Codex must inspect the diff and run tests first; after that review, the user may choose a Luna/Terra fallback. Do not retry over an unreviewed partial workspace.
+
 ## Verification gate
 
-The PoC has been tested successfully with deterministic fake-`agy` coverage for success, malformed output, failures, timeout, cancellation, workspace validation, concurrency warnings, and secret redaction, plus the plugin build/typecheck/test flow. It also passed an authenticated Windows smoke run with `agy` 1.1.19 and `gemini-3.7-flash-high`: the worker implemented a disposable fixture, and Codex independently reran all three fixture tests. Repeat the live smoke on each machine and platform before relying on it for a new repository.
+The PoC has been tested successfully with deterministic fake-`agy` coverage for success, malformed output, failure classification, retry-after formats, safe read-only retries, timeout recovery, cancellation, four-job concurrency, circuit breaking, workspace validation/change gating, and secret redaction, plus the plugin build/typecheck/test flow. It also passed an authenticated Windows smoke run with `agy` 1.1.19 and `gemini-3.7-flash-high`: the worker implemented a disposable fixture, and Codex independently reran all three fixture tests. Repeat the live smoke on each machine and platform before relying on it for a new repository.
 
 The bridge is ready for a public plugin experiment only when all of the following are true:
 

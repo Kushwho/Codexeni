@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { createEscapingLink, createFakeSpawn, makeWorkspace } from "./helpers.mjs";
+import { createEscapingLink, createFakeSpawn, createManualTimers, makeWorkspace, writeOnSpawn } from "./helpers.mjs";
 
 // The package test command must build first, so consumers exercise its public
 // compiled API exactly as Codex does rather than relying on a TypeScript loader.
@@ -17,7 +17,7 @@ function config(root, overrides = {}) {
     permissionMode: "restricted",
     defaultModel: "gemini-3.7-flash-high",
     defaultTimeoutSeconds: 1,
-    maxConcurrency: 2,
+    maxConcurrency: 4,
     ...overrides,
   };
 }
@@ -49,7 +49,7 @@ test("configuration parsing has safe defaults and a bounded concurrency", () => 
   assert.equal(resolved.permissionMode, "full");
   assert.equal(resolved.defaultModel, "gemini-3.7-flash-high");
   assert.equal(resolved.defaultTimeoutSeconds, 900);
-  assert.equal(resolved.maxConcurrency, 2);
+  assert.equal(resolved.maxConcurrency, 4);
 });
 
 test("Agy arguments retain hostile task text as one prompt argument", () => {
@@ -102,6 +102,27 @@ test("NDJSON preserves success events and captures malformed output", () => {
     type: "unparsed_output",
     data: "not-json",
   });
+});
+
+test("provider failures are classified without relying on one CLI event shape", () => {
+  assert.equal(bridge.classifyFailure("HTTP 429 too many requests"), "rate_limited");
+  assert.equal(bridge.classifyFailure({ error: "RESOURCE_EXHAUSTED: quota exceeded" }), "quota_exhausted");
+  assert.equal(bridge.classifyFailure("quota exhausted; out of credits"), "quota_exhausted");
+  assert.equal(bridge.classifyFailure("session limit reached"), "session_limit");
+  assert.equal(bridge.classifyFailure("maximum context window token limit"), "context_limit");
+  assert.equal(bridge.classifyFailure("login required: session expired"), "authentication");
+  assert.equal(bridge.classifyFailure("unexpected error"), undefined);
+});
+
+test("provider retry-after parsing handles seconds, milliseconds, and reset dates", () => {
+  const now = Date.parse("2026-01-01T00:00:00.000Z");
+  assert.equal(bridge.parseRetryAfterMs("retry-after: 1.5 seconds", now), 1_500);
+  assert.equal(bridge.parseRetryAfterMs("retry-after_ms=250", now), 250);
+  assert.equal(bridge.parseRetryAfterMs({ error: { retry_after: 2 } }, now), 2_000);
+  assert.equal(bridge.parseRetryAfterMs({ error: { retry_after_ms: 750 } }, now), 750);
+  assert.equal(bridge.parseRetryAfterMs("reset_at=2026-01-01T00:00:02.000Z", now), 2_000);
+  assert.equal(bridge.parseRetryAfterMs("Retry-After: Thu, 01 Jan 2026 00:00:05 GMT", now), 5_000);
+  assert.equal(bridge.parseRetryAfterMs("no retry hint", now), undefined);
 });
 
 test("delegation prompt pins the worker to its selected workspace", () => {
@@ -185,9 +206,9 @@ test("structured stdout and temporary logs redact sensitive fields", async () =>
   });
 });
 
-test("runtime enforces concurrency, warns same-workspace writers, and supports cancellation", async () => {
+test("runtime enforces the four-job ceiling, warns same-workspace writers, and supports cancellation", async () => {
   const { root } = await makeWorkspace();
-  const { spawnImpl, calls } = createFakeSpawn([{ close: false }, { close: false }]);
+  const { spawnImpl, calls } = createFakeSpawn([{ close: false }, { close: false }, { close: false }, { close: false }]);
   let sequence = 0;
   const runtime = new bridge.AgyBridgeRuntime({
     config: config(root),
@@ -197,8 +218,10 @@ test("runtime enforces concurrency, warns same-workspace writers, and supports c
   });
   const first = await runtime.startTask({ task: "one", workspace: root });
   const second = await runtime.startTask({ task: "two", workspace: root });
+  await runtime.startTask({ task: "three", workspace: root });
+  await runtime.startTask({ task: "four", workspace: root });
   assert.deepEqual(second.warnings, ["Another Antigravity job is already writing to this workspace; changes may overlap."]);
-  await assert.rejects(() => runtime.startTask({ task: "three", workspace: root }), /Maximum concurrency/);
+  await assert.rejects(() => runtime.startTask({ task: "five", workspace: root }), /Maximum concurrency/);
   const canceled = await runtime.cancelTask(first.jobId);
   assert.equal(canceled.canceled, true);
   calls[0].child.exitCode = null;
@@ -206,6 +229,10 @@ test("runtime enforces concurrency, warns same-workspace writers, and supports c
   await waitFor(() => assert.equal(runtime.getTask(first.jobId).status, "canceled"));
   calls[1].child.exitCode = null;
   calls[1].child.emit("close", null, "SIGTERM");
+  calls[2].child.exitCode = null;
+  calls[2].child.emit("close", null, "SIGTERM");
+  calls[3].child.exitCode = null;
+  calls[3].child.emit("close", null, "SIGTERM");
   await runtime.shutdown();
 });
 
@@ -220,4 +247,222 @@ test("runtime marks a task timed out when its deadline expires", async () => {
   });
   const started = await runtime.startTask({ task: "slow", workspace: root, timeoutSeconds: 1 });
   await waitFor(() => assert.equal(runtime.getTask(started.jobId).status, "timed_out"), 1_500);
+});
+
+test("a read-only retry starts with a clean lifecycle after timeout", async () => {
+  const { root } = await makeWorkspace();
+  const timers = createManualTimers();
+  const { spawnImpl, calls } = createFakeSpawn([
+    { close: false },
+    { stdout: '{"event":"result","result":{"status":"SUCCESS","response":"recovered"}}\n', exitCode: 0 },
+  ]);
+  const runtime = new bridge.AgyBridgeRuntime({
+    config: config(root, { defaultTimeoutSeconds: 1 }), spawnImpl, stopChildImpl: stopFakeChild, randomImpl: () => 0,
+    setTimeoutImpl: timers.setTimeoutImpl, clearTimeoutImpl: timers.clearTimeoutImpl,
+  });
+  const started = await runtime.startTask({ task: "read-only timeout", workspace: root, taskMode: "read_only", maxRetries: 1, timeoutSeconds: 1 });
+  timers.runNext((timer) => timer.delay === 1_000);
+  await waitFor(() => assert.equal(runtime.getTask(started.jobId).status, "queued"));
+  timers.runNext((timer) => timer.delay === 15_000);
+  await waitFor(() => {
+    const job = runtime.getTask(started.jobId);
+    assert.equal(job.status, "succeeded");
+    assert.equal(job.response, "recovered");
+    assert.equal(job.signal, null);
+  });
+  assert.equal(calls.length, 2);
+});
+
+test("task mode and read-only retry limits are validated and coding always has zero retries", async () => {
+  const { root } = await makeWorkspace();
+  const { spawnImpl } = createFakeSpawn([{ close: false }]);
+  const runtime = new bridge.AgyBridgeRuntime({ config: config(root), spawnImpl, stopChildImpl: stopFakeChild });
+  await assert.rejects(() => runtime.startTask({ task: "bad mode", workspace: root, taskMode: "anything_else" }), /taskMode/);
+  await assert.rejects(() => runtime.startTask({ task: "too many", workspace: root, taskMode: "read_only", maxRetries: 3 }), /maxRetries/);
+  const started = await runtime.startTask({ task: "coding", workspace: root, taskMode: "coding", maxRetries: 2 });
+  assert.equal(started.taskMode, "coding");
+  assert.equal(started.maxRetries, 0);
+  await runtime.shutdown();
+});
+
+test("a read-only quota error retries a fresh child and honors bounded retry-after", async () => {
+  const { root } = await makeWorkspace();
+  const timers = createManualTimers();
+  const { spawnImpl, calls } = createFakeSpawn([
+    { stderr: "HTTP 429 rate limit; retry-after: 1 seconds\n", exitCode: 1 },
+    { stdout: '{"event":"result","result":{"status":"SUCCESS","response":"review complete"}}\n', exitCode: 0 },
+  ]);
+  let sequence = 0;
+  const runtime = new bridge.AgyBridgeRuntime({
+    config: config(root),
+    spawnImpl,
+    stopChildImpl: stopFakeChild,
+    randomImpl: () => 0,
+    setTimeoutImpl: timers.setTimeoutImpl,
+    clearTimeoutImpl: timers.clearTimeoutImpl,
+    randomUUIDImpl: () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`,
+  });
+  const started = await runtime.startTask({ task: "inspect only", workspace: root, taskMode: "read_only", maxRetries: 1 });
+  await waitFor(() => {
+    const job = runtime.getTask(started.jobId);
+    assert.equal(job.status, "queued");
+    assert.equal(job.errorCategory, "rate_limited");
+    assert.equal(job.retryCount, 1);
+    assert.ok(job.nextRetryAt);
+  });
+  const retryTimer = timers.pending().find((timer) => timer.delay < 900_000);
+  assert.ok(retryTimer, "a retry timer should be scheduled separately from the task timeout");
+  assert.equal(retryTimer.delay, 1_000, "a bounded provider retry-after should be honored exactly");
+  timers.runNext((timer) => timer === retryTimer);
+  await waitFor(() => {
+    const job = runtime.getTask(started.jobId);
+    assert.equal(job.status, "succeeded");
+    assert.equal(job.retryCount, 1);
+    assert.equal(job.model, "gemini-3.7-flash-high");
+    assert.equal(job.errorCategory, undefined, "a successful fresh attempt must not retain the earlier 429 classification");
+    assert.equal(job.nextRetryAt, undefined);
+    assert.equal(job.hasPartialChanges, false, "successful changes are reported as fileChanges, not partialChanges");
+  });
+  assert.equal(runtime.breakers.size, 0, "a successful retry proves capacity and closes the model circuit");
+  assert.equal(calls.length, 2, "a retry must use a fresh agy child process");
+  assert.equal(calls[0].args[calls[0].args.indexOf("--model") + 1], "gemini-3.7-flash-high");
+  assert.equal(calls[1].args[calls[1].args.indexOf("--model") + 1], "gemini-3.7-flash-high");
+});
+
+test("coding does not retry a retryable provider failure", async () => {
+  const { root } = await makeWorkspace();
+  const timers = createManualTimers();
+  const { spawnImpl, calls } = createFakeSpawn([{ stderr: "429 rate limit; retry-after: 1\n", exitCode: 1 }]);
+  const runtime = new bridge.AgyBridgeRuntime({
+    config: config(root), spawnImpl, stopChildImpl: stopFakeChild, randomImpl: () => 0,
+    setTimeoutImpl: timers.setTimeoutImpl, clearTimeoutImpl: timers.clearTimeoutImpl,
+  });
+  const started = await runtime.startTask({ task: "change code", workspace: root, taskMode: "coding", maxRetries: 2 });
+  await waitFor(() => {
+    const job = runtime.getTask(started.jobId);
+    assert.equal(job.status, "failed");
+    assert.equal(job.errorCategory, "rate_limited");
+    assert.equal(job.retryCount, 0);
+    assert.equal(job.retryable, false);
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(timers.pending().filter((timer) => timer.delay < 900_000).length, 0);
+});
+
+test("a context-limit failure is classified but not replayed with the same prompt", async () => {
+  const { root } = await makeWorkspace();
+  const timers = createManualTimers();
+  const { spawnImpl, calls } = createFakeSpawn([{ stderr: "maximum context window exceeded\n", exitCode: 1 }]);
+  const runtime = new bridge.AgyBridgeRuntime({
+    config: config(root), spawnImpl, stopChildImpl: stopFakeChild, randomImpl: () => 0,
+    setTimeoutImpl: timers.setTimeoutImpl, clearTimeoutImpl: timers.clearTimeoutImpl,
+  });
+  const started = await runtime.startTask({ task: "oversized review", workspace: root, taskMode: "read_only", maxRetries: 2 });
+  await waitFor(() => {
+    const job = runtime.getTask(started.jobId);
+    assert.equal(job.status, "failed");
+    assert.equal(job.errorCategory, "context_limit");
+    assert.equal(job.retryable, false);
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(timers.pending().filter((timer) => timer.delay < 900_000).length, 0);
+});
+
+test("a provider retry-after beyond the safety cap is reported but never scheduled", async () => {
+  const { root } = await makeWorkspace();
+  const timers = createManualTimers();
+  const { spawnImpl, calls } = createFakeSpawn([{ stderr: "429 rate limit retry-after: 999999 seconds\n", exitCode: 1 }]);
+  const runtime = new bridge.AgyBridgeRuntime({
+    config: config(root), spawnImpl, stopChildImpl: stopFakeChild, randomImpl: () => 0,
+    setTimeoutImpl: timers.setTimeoutImpl, clearTimeoutImpl: timers.clearTimeoutImpl,
+  });
+  const started = await runtime.startTask({ task: "inspect", workspace: root, taskMode: "read_only", maxRetries: 2 });
+  await waitFor(() => {
+    const job = runtime.getTask(started.jobId);
+    assert.equal(job.status, "failed");
+    assert.equal(job.retryable, false);
+    assert.ok(job.nextRetryAt);
+    assert.match(job.warnings.join("\n"), /exceeds five minutes/i);
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(timers.pending().filter((timer) => timer.delay < 900_000).length, 0);
+});
+
+test("read-only retries stop at two attempts and never retry after workspace changes", async () => {
+  const { root } = await makeWorkspace();
+  const timers = createManualTimers();
+  const { spawnImpl, calls } = createFakeSpawn([
+    { stderr: "429 rate limit retry-after: 0\n", exitCode: 1 },
+    { stderr: "429 rate limit retry-after: 0\n", exitCode: 1 },
+    { stderr: "429 rate limit retry-after: 0\n", exitCode: 1 },
+  ]);
+  const runtime = new bridge.AgyBridgeRuntime({
+    config: config(root), spawnImpl, stopChildImpl: stopFakeChild, randomImpl: () => 0,
+    setTimeoutImpl: timers.setTimeoutImpl, clearTimeoutImpl: timers.clearTimeoutImpl,
+  });
+  const started = await runtime.startTask({ task: "review", workspace: root, taskMode: "read_only", maxRetries: 2 });
+  for (let retry = 1; retry <= 2; retry += 1) {
+    await waitFor(() => assert.equal(runtime.getTask(started.jobId).retryCount, retry));
+    timers.runNext((timer) => timer.delay < 900_000);
+  }
+  await waitFor(() => {
+    const job = runtime.getTask(started.jobId);
+    assert.equal(job.status, "failed");
+    assert.equal(job.retryCount, 2);
+  });
+  assert.equal(calls.length, 3);
+
+  const changedWorkspace = await makeWorkspace();
+  const changedTimers = createManualTimers();
+  const changed = createFakeSpawn([{
+    stderr: "429 rate limit retry-after: 0\n",
+    exitCode: 1,
+    onSpawn: writeOnSpawn(join(changedWorkspace.root, "unexpected-change.txt"), "changed"),
+  }]);
+  const changedRuntime = new bridge.AgyBridgeRuntime({
+    config: config(changedWorkspace.root), spawnImpl: changed.spawnImpl, stopChildImpl: stopFakeChild, randomImpl: () => 0,
+    setTimeoutImpl: changedTimers.setTimeoutImpl, clearTimeoutImpl: changedTimers.clearTimeoutImpl,
+  });
+  const changedStart = await changedRuntime.startTask({ task: "read only", workspace: changedWorkspace.root, taskMode: "read_only", maxRetries: 2 });
+  await waitFor(() => {
+    const job = changedRuntime.getTask(changedStart.jobId);
+    assert.equal(job.status, "failed");
+    assert.equal(job.hasPartialChanges, true);
+    assert.deepEqual(job.partialChanges.created, ["unexpected-change.txt"]);
+  });
+  assert.equal(changed.calls.length, 1, "workspace mutations must suppress retries");
+});
+
+test("an open same-model quota circuit is visible in health and blocks new starts without fallback", async () => {
+  const { root } = await makeWorkspace();
+  const timers = createManualTimers();
+  const { spawnImpl, calls } = createFakeSpawn([
+    { stderr: "quota exhausted: out of credits\n", exitCode: 1 },
+    { stdout: "agy test version\n", exitCode: 0 },
+    { stdout: "gemini-3.7-flash-high\n", exitCode: 0 },
+  ]);
+  let milliseconds = Date.parse("2026-01-01T00:00:00.000Z");
+  const runtime = new bridge.AgyBridgeRuntime({
+    config: config(root), spawnImpl, stopChildImpl: stopFakeChild, randomImpl: () => 0,
+    now: () => new Date(milliseconds),
+    setTimeoutImpl: timers.setTimeoutImpl, clearTimeoutImpl: timers.clearTimeoutImpl,
+  });
+  const started = await runtime.startTask({ task: "coding quota failure", workspace: root, taskMode: "coding", model: "gemini-3.7-flash-high" });
+  await waitFor(() => {
+    const job = runtime.getTask(started.jobId);
+    assert.equal(job.status, "failed");
+    assert.ok(job.blockedUntil, "the completed failure must open a model circuit");
+  });
+  assert.equal(calls.length, 1);
+  await assert.rejects(
+    () => runtime.startTask({ task: "must not fallback", workspace: root, taskMode: "coding", model: "gemini-3.7-flash-high" }),
+    /circuit|quota|blocked/i,
+  );
+  assert.equal(calls.length, 1, "a circuit rejection must not spawn a replacement model");
+  const health = await runtime.health();
+  assert.equal(health.circuitBreakers.length, 1);
+  assert.equal(health.circuitBreakers[0].model, "gemini-3.7-flash-high");
+  assert.ok(Date.parse(health.circuitBreakers[0].blockedUntil) > milliseconds);
+  milliseconds += bridge.CIRCUIT_BREAKER_MS + 1;
+  await runtime.startTask({ task: "circuit expired", workspace: root, taskMode: "coding", model: "gemini-3.7-flash-high" });
 });

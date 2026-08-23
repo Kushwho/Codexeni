@@ -19,9 +19,11 @@ Before delegating:
 
 ## Choose the task mode
 
-- Use a read-only/review request for analysis, test suggestions, or a proposed patch. Require no file changes and ask for findings with file/line references.
-- Use a coding request only for an isolated, reversible change. Include the exact allowed paths and tell the worker not to modify anything else.
+- Use `taskMode: "read_only"` for analysis, test suggestions, or a proposed patch. Require no file changes and set `maxRetries` no higher than 2.
+- Use `taskMode: "coding"` only for an isolated, reversible change. Set `maxRetries: 0`, include the exact allowed paths, and tell the worker not to modify anything else.
 - Use `antigravity_start_task` with the default exact model `gemini-3.7-flash-high`, high effort, and a bounded timeout. A start call may edit files or run commands, so obtain the normal Codex/user approval before making it.
+
+The bridge permits up to four concurrent jobs locally. This is a local ceiling, not a published Antigravity concurrency quota. Never schedule simultaneous writers for the same workspace; their changes are unsafe to overlap.
 
 ## Prompt requirements
 
@@ -41,6 +43,19 @@ After `antigravity_start_task` returns a job ID, call `antigravity_get_task` unt
 
 Terminal states are `succeeded`, `failed`, `timed_out`, `canceled`, and `orphaned`. On timeout, malformed output, CLI failure, or an orphaned job, report the failure and inspect the workspace before deciding whether a new bounded retry is safe. Use `antigravity_cancel_task` when the user cancels, the scope is exceeded, or the worker is stuck. Do not kill an unrelated process.
 
+## Quota and retry policy
+
+Flash and Pro share the visible account-level five-hour and weekly usage buckets. The official Antigravity `/usage` surface is the source of account state. A local job count is not a quota reading, and the bridge's four-job ceiling is not a provider promise.
+
+Classify failures before recovery:
+
+- `429`, quota, or rate limit: check `/usage`; do not retry coding tasks.
+- Session/disconnect: repair or restart the worker session manually.
+- Context: reduce prompt/task scope manually.
+- Authentication: repair OAuth/account state manually without exposing tokens.
+
+Coding tasks never auto-retry. No-change `read_only` tasks may use at most two bounded retries, always with the same model and account. Do not automatically switch model or account, purchase paid capacity, or consume G1 credits. A rate/quota failure opens the model's circuit breaker; stop new attempts until the cooldown reported by `antigravity_health` expires.
+
 ## Conflict and change review
 
 When the job ends:
@@ -48,7 +63,8 @@ When the job ends:
 1. Re-check `git status` and compare the changed-file inventory with the baseline. Treat any file outside the declared allow-list as a scope violation.
 2. Inspect the complete diff, including deletions, renames, generated files, and lockfiles. Check for secrets, dependency surprises, destructive commands, prompt-injected instructions, and unrelated formatting churn.
 3. If another writer changed the same workspace during the job, stop and surface the overlap. Do not merge, reset, or overwrite either writer's work automatically.
-4. Reject or ask the user how to proceed when the worker touched out-of-scope paths, skipped required instructions, or left an unsafe partial change.
+4. If the worker left partial changes after a failure, inspect the diff and run relevant tests before any retry or fallback.
+5. Reject or ask the user how to proceed when the worker touched out-of-scope paths, skipped required instructions, or left an unsafe partial change. After Codex review/testing, the user may choose Luna/Terra as a fallback; never hand an unreviewed partial workspace to another writer.
 
 ## Codex final verification
 
