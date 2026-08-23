@@ -1,6 +1,6 @@
 {
   "name": "codexeni",
-  "version": "0.1.0+codex.20260823150746",
+  "version": "0.1.0+codex.20260823155445",
   "description": "Codexeni lets Codex delegate bounded coding work to an authenticated local Antigravity CLI session.",
   "author": {
     "name": "Kushwho",

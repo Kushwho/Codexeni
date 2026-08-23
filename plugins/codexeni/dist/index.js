@@ -21446,7 +21446,7 @@ function parsePositiveInt(value, fallback) {
 }
 function resolveBridgeConfig(env = process.env) {
   const permission = nonEmptyEnv(env.AGY_BRIDGE_PERMISSION_MODE)?.toLowerCase();
-  const permissionMode = permission === "full" ? "full" : "restricted";
+  const permissionMode = permission === void 0 || permission === "full" ? "full" : "restricted";
   const roots = (env.AGY_BRIDGE_ALLOWED_ROOTS ?? "").split(delimiter).map((entry) => entry.trim()).filter(Boolean).map((entry) => resolve(entry));
   return {
     executable: nonEmptyEnv(env.AGY_BRIDGE_AGY_PATH) ?? "agy",

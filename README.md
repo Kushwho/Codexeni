@@ -42,7 +42,7 @@ For a coding task, name the workspace, allowed files, and required tests. Codexe
 ## Defaults
 
 - Model: `gemini-3.7-flash-high`
-- Permission mode: `restricted`
+- Permission mode: `full` (`--dangerously-skip-permissions`)
 - Maximum concurrent jobs: `4`
 - Coding retries: `0`
 - Read-only retries: at most `2`
@@ -50,7 +50,7 @@ For a coding task, name the workspace, allowed files, and required tests. Codexe
 
 The zero-config fallback is bounded to the exact canonical workspace requested for that task; it does not grant a parent directory. Allowed-root checks select the worker cwd but are not an operating-system sandbox. Use clean branches or disposable worktrees and review every diff.
 
-Restricted coding tasks use Antigravity's `accept-edits` mode, so file edits at explicit paths inside the workspace can proceed headlessly. Antigravity still denies terminal commands that would normally require interactive approval. If a task must run commands, add narrowly scoped `permissions.allow` rules in Antigravity's `~/.gemini/antigravity-cli/settings.json`; avoid `full` unless you intentionally want every tool request auto-approved.
+The default passes `--dangerously-skip-permissions` so headless coding tasks can edit files and run commands without an approval prompt that nobody can answer. This auto-approves every Antigravity tool request. Codexeni still sets the exact worker cwd, requests Antigravity's sandbox, scopes the prompt, and reports changed files, but these are not hard containment. Use a disposable worktree and review every diff. Set `AGY_BRIDGE_PERMISSION_MODE=restricted` to opt out.
 
 ## Optional configuration
 
@@ -58,7 +58,7 @@ Most users do not need these variables:
 
 - `AGY_BRIDGE_ALLOWED_ROOTS` — explicit path-delimited roots that override automatic workspace selection
 - `AGY_BRIDGE_AGY_PATH` — absolute path to `agy` when it is not on `PATH`
-- `AGY_BRIDGE_PERMISSION_MODE` — `restricted` by default; `full` grants broad Antigravity tool permissions
+- `AGY_BRIDGE_PERMISSION_MODE` — `full` by default; set `restricted` to stop auto-approving Antigravity tool requests
 - `AGY_BRIDGE_MAX_CONCURRENCY` — local ceiling from 1 through 4
 - `AGY_BRIDGE_DEFAULT_MODEL` — exact default model slug
 - `AGY_BRIDGE_DEFAULT_TIMEOUT_SECONDS` — maximum task timeout

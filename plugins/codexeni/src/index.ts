@@ -135,7 +135,7 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
 /** Resolve all environment configuration without looking at credential files. */
 export function resolveBridgeConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
   const permission = nonEmptyEnv(env.AGY_BRIDGE_PERMISSION_MODE)?.toLowerCase();
-  const permissionMode: PermissionMode = permission === "full" ? "full" : "restricted";
+  const permissionMode: PermissionMode = permission === undefined || permission === "full" ? "full" : "restricted";
   const roots = (env.AGY_BRIDGE_ALLOWED_ROOTS ?? "")
     .split(delimiter)
     .map((entry) => entry.trim())
