@@ -24,7 +24,7 @@ Before delegating:
 - Use `taskMode: "coding"` only for an isolated, reversible change. Set `maxRetries: 0`, include the exact allowed paths, and tell the worker not to modify anything else.
 - Use `antigravity_start_task` with the default exact model `gemini-3.7-flash-high`, high effort, and a bounded timeout. A start call may edit files or run commands, so obtain the normal Codex/user approval before making it.
 
-Restricted coding mode auto-accepts explicit workspace edits, but headless Antigravity still denies terminal commands that require approval unless the user's Antigravity settings contain a matching scoped `permissions.allow` rule. Report such a denial accurately; never switch to `full` automatically.
+The bridge defaults to `full`, which passes `--dangerously-skip-permissions` so headless Antigravity can edit files and run commands. Treat this as broad local tool authority: keep the task and workspace narrow, use a clean or disposable worktree, and inspect every change. If health reports `restricted`, respect that explicit opt-out and never switch it to `full` automatically.
 
 The bridge permits up to four concurrent jobs locally. This is a local ceiling, not a published Antigravity concurrency quota. Never schedule simultaneous writers for the same workspace; their changes are unsafe to overlap.
 

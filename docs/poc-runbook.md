@@ -2,13 +2,13 @@
 
 Run the stages in order. Keep the fixture and test output outside the production repository, and do not paste authentication output into logs or issues.
 
-Start Codex from the repository you want to work in. No bridge environment variables are required; restricted mode and the current task workspace are the defaults:
+Start Codex from the repository you want to work in. No bridge environment variables are required; full headless permissions and the current task workspace are the defaults:
 
 ```powershell
 codex
 ```
 
-The server prefers optional `AGY_BRIDGE_ALLOWED_ROOTS`, then standard MCP `roots/list`. When neither is available, it canonicalizes the workspace supplied with each task and uses that exact directory as the task boundary. It never substitutes `${PLUGIN_ROOT}` or the MCP server's `process.cwd`. `AGY_BRIDGE_AGY_PATH` is optional when `agy` is not on `PATH`. `restricted` is the default; `full` passes `--dangerously-skip-permissions` and is not a hard sandbox. Workspace checks validate the worker's cwd, while `--sandbox` is passed best-effort and cannot guarantee containment for every tool or platform. Restart Codex after changing any optional environment override.
+The server prefers optional `AGY_BRIDGE_ALLOWED_ROOTS`, then standard MCP `roots/list`. When neither is available, it canonicalizes the workspace supplied with each task and uses that exact directory as the task boundary. It never substitutes `${PLUGIN_ROOT}` or the MCP server's `process.cwd`. `AGY_BRIDGE_AGY_PATH` is optional when `agy` is not on `PATH`. `full` is the default and passes `--dangerously-skip-permissions`; set `AGY_BRIDGE_PERMISSION_MODE=restricted` to opt out. Workspace checks validate the worker's cwd, while `--sandbox` is passed best-effort and cannot guarantee containment for every tool or platform. Restart Codex after changing any optional environment override.
 
 ## 1. Prerequisite and model gate
 

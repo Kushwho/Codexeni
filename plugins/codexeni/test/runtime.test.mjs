@@ -44,7 +44,9 @@ async function waitFor(assertion, timeoutMs = 500) {
   throw lastError ?? new Error("Condition did not become true");
 }
 
-test("configuration parsing has safe defaults and a bounded concurrency", () => {
+test("configuration defaults to headless full permissions, preserves the restricted opt-out, and bounds concurrency", () => {
+  assert.equal(bridge.resolveBridgeConfig({}).permissionMode, "full");
+  assert.equal(bridge.resolveBridgeConfig({ AGY_BRIDGE_PERMISSION_MODE: "restricted" }).permissionMode, "restricted");
   const resolved = bridge.resolveBridgeConfig({
     AGY_BRIDGE_PERMISSION_MODE: "FULL",
     AGY_BRIDGE_DEFAULT_TIMEOUT_SECONDS: "not-a-number",
