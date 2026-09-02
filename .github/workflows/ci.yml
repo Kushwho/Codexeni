@@ -47,6 +47,9 @@ jobs:
           pnpm build
           git diff --exit-code -- dist/
 
+      - name: Verify host manifests agree
+        run: pnpm check:manifests
+
       - name: Typecheck
         run: pnpm typecheck
 

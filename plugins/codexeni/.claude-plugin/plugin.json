@@ -1,0 +1,29 @@
+{
+  "name": "codexeni",
+  "version": "0.1.0-dev.20260829201950",
+  "description": "Codexeni lets any MCP-speaking coding harness delegate bounded coding work to another authenticated local coding harness; Antigravity and Claude Code are the built-in workers.",
+  "author": {
+    "name": "Kushwho",
+    "url": "https://github.com/Kushwho"
+  },
+  "homepage": "https://github.com/Kushwho/Codexeni",
+  "repository": "https://github.com/Kushwho/Codexeni",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "delegation",
+    "coding-agent",
+    "harness",
+    "antigravity",
+    "claude-code",
+    "codex"
+  ],
+  "mcpServers": {
+    "codexeni": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/dist/index.js"
+      ]
+    }
+  }
+}

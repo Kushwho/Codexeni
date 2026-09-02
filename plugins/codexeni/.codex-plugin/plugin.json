@@ -1,7 +1,7 @@
 {
   "name": "codexeni",
-  "version": "0.1.0+codex.20260823155445",
-  "description": "Codexeni lets Codex delegate bounded coding work to an authenticated local Antigravity CLI session.",
+  "version": "0.1.0-dev.20260829201950",
+  "description": "Codexeni lets any MCP-speaking coding harness delegate bounded coding work to another authenticated local coding harness; Antigravity and Claude Code are the built-in workers.",
   "author": {
     "name": "Kushwho",
     "url": "https://github.com/Kushwho"
@@ -14,13 +14,16 @@
     "antigravity",
     "gemini",
     "mcp",
-    "coding-agent"
+    "coding-agent",
+    "claude-code",
+    "harness",
+    "delegation"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Codexeni",
-    "shortDescription": "Delegate bounded coding tasks to local Antigravity.",
-    "longDescription": "Codexeni is an unofficial bridge for Codex to orchestrate an authenticated local Antigravity CLI session using Gemini 3.7 Flash. Codex remains responsible for approvals, conflict review, and final verification.",
+    "shortDescription": "Delegate bounded coding tasks to a local coding harness.",
+    "longDescription": "Codexeni is an unofficial, harness-neutral bridge that lets one coding harness orchestrate an authenticated local worker harness for bounded coding and review tasks; Antigravity and Claude Code are the built-in workers, with more adapters planned. The orchestrator remains responsible for approvals, conflict review, and final verification.",
     "developerName": "Kushwho",
     "category": "Productivity",
     "capabilities": [
@@ -29,10 +32,10 @@
       "Execute"
     ],
     "defaultPrompt": [
-      "Delegate this bounded coding task to Antigravity.",
-      "Ask Antigravity to review these files, then verify its findings.",
-      "Poll the Antigravity task and summarize changed files."
+      "Use delegate_discover to see which local coding harnesses are installed, then delegate this bounded coding task to one.",
+      "Ask the worker harness to review these files, then verify its findings.",
+      "Poll the delegated task and summarize changed files."
     ]
   },
-  "mcpServers": "./.mcp.json"
+  "mcpServers": "./.codex-plugin/mcp.json"
 }

@@ -1,0 +1,15 @@
+{
+  "name": "personal",
+  "description": "Kushwho's local plugins, including Codexeni (harness-to-harness task delegation over MCP).",
+  "owner": {
+    "name": "Kushwho",
+    "url": "https://github.com/Kushwho"
+  },
+  "plugins": [
+    {
+      "name": "codexeni",
+      "source": "./plugins/codexeni",
+      "description": "Delegate bounded coding tasks from one local coding harness to another (Antigravity, Claude Code) over MCP."
+    }
+  ]
+}
