@@ -204,7 +204,7 @@ test("the MCP server exposes the five delegate tools and never asks the client f
   assert.equal(status.inputRequest.question, "Which option should I use?");
   assert.deepEqual(status.inputRequest.options, ["option-a", "option-b"]);
   assert.deepEqual(status.interactionRound, { current: 0, max: bridge.LIMITS.maxInputRounds, remaining: bridge.LIMITS.maxInputRounds });
-  assert.equal(status.continuationSupported, true);
+  assert.equal(status.continuation.supported, true);
 
   const discovered = payloadOf(await client.callTool({ name: "delegate_discover", arguments: {} }));
   assert.equal(discovered.humanInput.toolName, "delegate_respond");
@@ -217,6 +217,26 @@ test("the MCP server exposes the five delegate tools and never asks the client f
 
   assert.equal(seen.roots, 0, "the bridge must never issue roots/list");
   assert.equal(seen.sampling, 0, "the bridge must never issue sampling/createMessage");
+  await close();
+});
+
+test("delegate_status compacts echoed schemas unless full events are explicitly requested", async () => {
+  const { root } = await makeWorkspace();
+  const schema = { type: "object", properties: { summary: { type: "string" } } };
+  const line = `${JSON.stringify({ type: "message", conversation_id: "schema-job", content: "Working", json_schema: schema })}\n`;
+  const { spawnImpl } = createFakeSpawn([{ stdout: `${line}${DONE_LINE}`, exitCode: 0 }]);
+  const runtime = makeRuntime(bridge, root, {}, { spawnImpl });
+  const { client, close } = await connectClient(runtime);
+  const started = payloadOf(await client.callTool({ name: "delegate_start", arguments: { task: "compact events", workspace: root } }));
+  await waitFor(() => assert.equal(runtime.getTask(started.jobId).status, "succeeded"));
+
+  const compact = payloadOf(await client.callTool({ name: "delegate_status", arguments: { jobId: started.jobId } }));
+  assert.equal(compact.events[0].message, "Working");
+  assert.equal(compact.events[0].data, undefined);
+  assert.doesNotMatch(JSON.stringify(compact.events), /json_schema/);
+
+  const full = payloadOf(await client.callTool({ name: "delegate_status", arguments: { jobId: started.jobId, eventDetail: "full" } }));
+  assert.deepEqual(full.events[0].data.json_schema, schema);
   await close();
 });
 
@@ -393,6 +413,7 @@ test("Antigravity adapter command retains hostile task text as one prompt argume
   const spec = adapter.command({
     prompt: hostileTask,
     workspace: "C:\\safe\\fixture",
+    timeoutSeconds: 900,
     model: "gemini-3.7-flash-high",
     effort: "high",
     permissionMode: "restricted",
@@ -404,6 +425,7 @@ test("Antigravity adapter command retains hostile task text as one prompt argume
   assert.deepEqual(spec.args.slice(0, schemaIndex), [
     "--model", "gemini-3.7-flash-high",
     "--output-format", "stream-json",
+    "--print-timeout", "900s",
     "--sandbox",
     "--mode", "accept-edits",
   ]);
@@ -412,10 +434,10 @@ test("Antigravity adapter command retains hostile task text as one prompt argume
   assert.equal(spec.args.filter((arg) => arg === hostileTask).length, 1);
   assert.ok(!spec.args.includes("--dangerously-skip-permissions"));
 
-  const fullSpec = adapter.command({ prompt: "x", workspace: "w", model: "m", effort: "low", permissionMode: "full", taskMode: "coding" });
+  const fullSpec = adapter.command({ prompt: "x", workspace: "w", timeoutSeconds: 900, model: "m", effort: "low", permissionMode: "full", taskMode: "coding" });
   assert.ok(fullSpec.args.includes("--dangerously-skip-permissions"));
 
-  const readOnlySpec = adapter.command({ prompt: "review", workspace: "w", model: "m", effort: "high", permissionMode: "restricted", taskMode: "read_only" });
+  const readOnlySpec = adapter.command({ prompt: "review", workspace: "w", timeoutSeconds: 900, model: "m", effort: "high", permissionMode: "restricted", taskMode: "read_only" });
   assert.equal(readOnlySpec.args[readOnlySpec.args.indexOf("--mode") + 1], "plan");
 });
 
@@ -425,7 +447,7 @@ test("Antigravity expresses effort through the model slug and never passes --eff
   // `agy` rejects the flag in every case, so it must never be built into the command.
   for (const effort of ["low", "medium", "high"]) {
     for (const model of ["gemini-3.7-flash-high", "claude-sonnet-4-6", undefined]) {
-      const spec = adapter.command({ prompt: "x", workspace: "w", model, effort, permissionMode: "full", taskMode: "coding" });
+      const spec = adapter.command({ prompt: "x", workspace: "w", timeoutSeconds: 900, model, effort, permissionMode: "full", taskMode: "coding" });
       assert.ok(!spec.args.includes("--effort"), `--effort reached agy for model ${model} at effort ${effort}`);
     }
   }
@@ -558,7 +580,7 @@ test("structured stdout and temporary logs redact sensitive fields", async () =>
   const runtime = makeRuntime(bridge, root, {}, { spawnImpl, randomUUIDImpl: () => "00000000-0000-4000-8000-000000000098" });
   const started = await runtime.startTask({ task: "safe output", workspace: root });
   const job = await waitFor(() => {
-    const current = runtime.getTask(started.jobId);
+    const current = runtime.getTask(started.jobId, 50, "full");
     assert.equal(current.status, "succeeded");
     assert.equal(current.events[0].data.authorization, "[redacted]");
     assert.equal(current.events[0].data.result.api_key, "[redacted]");
@@ -583,7 +605,7 @@ test("runtime enforces the four-job ceiling, warns same-workspace writers, and s
   const second = await runtime.startTask({ task: "two", workspace: root });
   await runtime.startTask({ task: "three", workspace: root });
   await runtime.startTask({ task: "four", workspace: root });
-  assert.deepEqual(second.warnings, ["Another job is already writing to this workspace; changes may overlap."]);
+  assert.deepEqual(second.warnings, ["Another job is already writing to this workspace; workspace changes cannot be attributed to one job."]);
   await assert.rejects(() => runtime.startTask({ task: "five", workspace: root }), /Maximum concurrency/);
   const canceled = await runtime.cancelTask(first.jobId);
   assert.equal(canceled.canceled, true);
@@ -677,7 +699,7 @@ test("a read-only quota error retries a fresh child and honors bounded retry-aft
     assert.equal(job.model, "gemini-3.7-flash-high");
     assert.equal(job.errorCategory, undefined, "a successful fresh attempt must not retain the earlier 429 classification");
     assert.equal(job.nextRetryAt, undefined);
-    assert.equal(job.hasPartialChanges, false, "successful changes are reported as fileChanges, not partialChanges");
+    assert.equal(job.hasPartialWorkspaceChanges, false, "successful changes are reported as workspaceChanges, not partialWorkspaceChanges");
   });
   assert.equal(runtime.breakers.size, 0, "a successful retry proves capacity and closes the model circuit");
   assert.equal(calls.length, 2, "a retry must use a fresh agy child process");
@@ -783,8 +805,8 @@ test("read-only retries stop at two attempts and never retry after workspace cha
   await waitFor(() => {
     const job = changedRuntime.getTask(changedStart.jobId);
     assert.equal(job.status, "failed");
-    assert.equal(job.hasPartialChanges, true);
-    assert.deepEqual(job.partialChanges.created, ["unexpected-change.txt"]);
+    assert.equal(job.hasPartialWorkspaceChanges, true);
+    assert.deepEqual(job.partialWorkspaceChanges.created, ["unexpected-change.txt"]);
   });
   assert.equal(changed.calls.length, 1, "workspace mutations must suppress retries");
 });

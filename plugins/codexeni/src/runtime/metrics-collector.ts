@@ -56,7 +56,7 @@ export class TaskMetricsCollector {
     const startedMs = record.startedAt ? new Date(record.startedAt).getTime() : undefined;
     const finishedMs = record.finishedAt ? new Date(record.finishedAt).getTime() : Date.now();
     const effectiveStartMs = startedMs ?? createdMs;
-    const changes = record.fileChanges ?? record.partialChanges;
+    const changes = record.workspaceChanges ?? record.partialWorkspaceChanges;
     return {
       schemaVersion: 1,
       jobId: record.id,

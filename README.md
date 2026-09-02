@@ -79,7 +79,9 @@ For a coding task, name the workspace, allowed files, and required tests. Codexe
 - `delegate_respond`
 - `delegate_cancel`
 
-If a worker asks a question, `delegate_status` reports `status: "awaiting_input"` with a bounded `inputRequest`, `interactionRound`, and whether continuation is supported. Use `delegate_respond` with `action: "answer"` to continue an existing safe task, or `action: "elicit"` to return the question to the host's human-input flow. The bridge never asks for secrets.
+If a worker asks a question, `delegate_status` reports `status: "awaiting_input"` with a bounded `inputRequest`, `interactionRound`, and job-specific `continuation` state. Use `delegate_respond` with `action: "answer"` to continue an existing safe task, `action: "resume"` to recover an eligible timed-out or failed conversation, or `action: "elicit"` to return the question to the host's human-input flow. The bridge never asks for secrets.
+
+`delegate_status` returns compact event summaries by default; set `eventDetail: "full"` only while debugging. Failed jobs expose a structured `failure` diagnostic. `workspaceChanges` reports snapshot activity in the shared workspace and is explicitly marked `unattributed_shared_workspace`; it is not proof that the worker authored those files.
 
 ## Defaults
 

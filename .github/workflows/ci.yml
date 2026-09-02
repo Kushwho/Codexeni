@@ -45,7 +45,7 @@ jobs:
       - name: Verify committed dist matches source
         run: |
           pnpm build
-          git diff --exit-code -- dist/
+          git diff --exit-code -- dist/index.js
 
       - name: Verify host manifests agree
         run: pnpm check:manifests

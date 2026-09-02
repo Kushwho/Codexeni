@@ -109,7 +109,7 @@ Safety: in the default `full` mode a `coding` task's worker approves its own com
 
 1. `delegate_discover` — expect at least one harness installed and authenticated.
 2. `delegate_start` with `taskMode: "read_only"`, `workspace` = `C:\Users\Kushal\Desktop\BWMI\experiments\codex-antigravity-bridge\plugins\codexeni\fixtures\clamp`, task: "Read src/clamp.mjs and test/clamp.test.mjs. Summarize what clamp does and say whether the tests cover an inverted range (min greater than max). Do not edit files." Use whichever harness `delegate_discover` reported as authenticated.
-3. `delegate_status` until `succeeded`; expect a `summary` and a `usage` object, and `fileChanges` with no created/modified files.
+3. `delegate_status` until `succeeded`; expect a `summary` and a `usage` object, and `workspaceChanges` with no created/modified files. Its attribution is shared-workspace activity, not per-worker proof.
 
 ## 6. If something goes wrong
 

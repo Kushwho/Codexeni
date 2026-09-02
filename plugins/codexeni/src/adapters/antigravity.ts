@@ -179,6 +179,7 @@ export class AntigravityAdapter implements HarnessAdapter {
     const args = [
       "--model", input.model ?? this.defaultModel,
       "--output-format", "stream-json",
+      "--print-timeout", `${input.timeoutSeconds}s`,
       "--sandbox",
       "--mode", input.taskMode === "read_only" ? "plan" : "accept-edits",
       "--json-schema", JSON.stringify(ANTIGRAVITY_WORKER_RESULT_SCHEMA),
@@ -217,7 +218,15 @@ export class AntigravityAdapter implements HarnessAdapter {
         const outcome = TERMINAL_STATUS[status];
         if (outcome) {
           interpretation.outcome = outcome;
-          interpretation.detail = outcome === "failed" ? `${this.displayName} returned terminal status ${status}.` : undefined;
+          if (outcome === "failed") {
+            const error = candidate.error;
+            let message: string | undefined;
+            if (typeof error === "string") message = error;
+            else if (isRecord(error) && typeof error.message === "string") message = error.message;
+            interpretation.detail = message ?? `${this.displayName} returned terminal status ${status}.`;
+            interpretation.failureMessage = interpretation.detail;
+            interpretation.failureSource = "harness";
+          }
         }
       }
     }

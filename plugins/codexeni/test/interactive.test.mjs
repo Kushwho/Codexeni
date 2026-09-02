@@ -32,7 +32,7 @@ test("a pause parks the job and exposes the question without a live child", asyn
   assert.equal(job.inputRequest.question, "Which option?");
   assert.deepEqual(job.inputRequest.options, ["option-a", "option-b"]);
   assert.deepEqual(job.interactionRound, { current: 0, max: 3, remaining: 3 });
-  assert.equal(job.continuationSupported, true);
+  assert.deepEqual(job.continuation, { supported: true, available: true, action: "answer" });
   assert.equal(job.finishedAt, undefined, "compactRecord clears finishedAt while awaiting input");
   assert.equal(typeof job.pid, "number", "the finished process's pid is retained for inspection");
   assert.equal(job.exitCode, 0);
@@ -208,8 +208,34 @@ test("a harness without continuation support never exposes it and refuses respon
   });
   // Claude Code's adapter never produces a workerResult/structured clarification, so it
   // can't itself pause into awaiting_input — that shows instead as continuationSupported: false.
-  assert.equal(job.continuationSupported, false);
+  assert.equal(job.continuation.supported, false);
   await assert.rejects(() => runtime.respondTask(started.jobId, "answer", "orchestrator"), /not awaiting input/);
+});
+
+test("a failed conversation exposes a diagnostic and can resume with a recovery instruction", async () => {
+  const { root } = await makeWorkspace();
+  const { spawnImpl, calls } = createFakeSpawn([
+    { stdout: '{"type":"result","conversation_id":"recoverable","status":"ERROR","error":"upstream interrupted"}\n', exitCode: 17 },
+    { stdout: COMPLETE_LINE, exitCode: 0 },
+  ]);
+  const runtime = makeRuntime(bridge, root, {}, { spawnImpl });
+  const started = await runtime.startTask({ task: "recover a task", workspace: root });
+
+  await waitFor(() => {
+    const job = runtime.getTask(started.jobId);
+    assert.equal(job.status, "failed");
+    assert.equal(job.failure.message, "upstream interrupted");
+    assert.equal(job.failure.source, "harness");
+    assert.equal(job.stderrSummary, "upstream interrupted");
+    assert.deepEqual(job.continuation, { supported: true, available: true, action: "resume" });
+  });
+
+  await runtime.resumeTask(started.jobId, "Continue from the edits already made.");
+  const conversationIndex = calls[1].args.indexOf("--conversation");
+  assert.equal(calls[1].args[conversationIndex + 1], "recoverable");
+  const promptIndex = calls[1].args.indexOf("--prompt");
+  assert.match(calls[1].args[promptIndex + 1], /Continue from the edits already made/);
+  await waitFor(() => assert.equal(runtime.getTask(started.jobId).status, "succeeded"));
 });
 
 test("workspace changes accumulate across a pause and its resuming turn", async () => {
@@ -226,8 +252,9 @@ test("workspace changes accumulate across a pause and its resuming turn", async 
   await waitFor(() => {
     const job = runtime.getTask(started.jobId);
     assert.equal(job.status, "awaiting_input");
-    assert.deepEqual(job.partialChanges.created, ["a.txt"]);
-    assert.equal(job.hasPartialChanges, true);
+    assert.deepEqual(job.partialWorkspaceChanges.created, ["a.txt"]);
+    assert.equal(job.hasPartialWorkspaceChanges, true);
+    assert.equal(job.partialWorkspaceChanges.attribution, "unattributed_shared_workspace");
   });
 
   await runtime.respondTask(started.jobId, "use option-a", "orchestrator");
@@ -237,8 +264,32 @@ test("workspace changes accumulate across a pause and its resuming turn", async 
     assert.equal(job.status, "succeeded");
     // The before-snapshot is taken once at task start, so the final diff carries
     // the first turn's file alongside the second turn's.
-    assert.deepEqual(job.fileChanges.created, ["a.txt", "b.txt"]);
-    assert.equal(job.partialChanges, undefined);
+    assert.deepEqual(job.workspaceChanges.created, ["a.txt", "b.txt"]);
+    assert.equal(job.partialWorkspaceChanges, undefined);
+  });
+});
+
+test("shared-workspace changes are explicitly unattributed when jobs overlap", async () => {
+  const { root } = await makeWorkspace();
+  const firstFile = join(root, "first.txt");
+  const secondFile = join(root, "second.txt");
+  const { spawnImpl, calls } = createFakeSpawn([
+    { close: false, stdout: COMPLETE_LINE, onSpawn: writeOnSpawn(firstFile, "first") },
+    { stdout: COMPLETE_LINE, onSpawn: writeOnSpawn(secondFile, "second") },
+  ]);
+  const runtime = makeRuntime(bridge, root, {}, { spawnImpl });
+  const first = await runtime.startTask({ task: "first writer", workspace: root });
+  const second = await runtime.startTask({ task: "second writer", workspace: root });
+  await waitFor(() => assert.equal(runtime.getTask(second.jobId).status, "succeeded"));
+  calls[0].child.exitCode = 0;
+  calls[0].child.emit("close", 0, null);
+
+  await waitFor(() => {
+    const job = runtime.getTask(first.jobId);
+    assert.equal(job.status, "succeeded");
+    assert.equal(job.workspaceChanges.attribution, "unattributed_shared_workspace");
+    assert.deepEqual(job.workspaceChanges.overlappingJobIds, [second.jobId]);
+    assert.deepEqual(job.workspaceChanges.created, ["first.txt", "second.txt"]);
   });
 });
 

@@ -7,7 +7,7 @@ export function mayRetry(record: TaskRecord): boolean {
   const retryableCategory = record.errorCategory === "rate_limited"
     || record.errorCategory === "session_limit"
     || record.errorCategory === "upstream_error";
-  const noChanges = Boolean(record.partialChanges && !record.partialChanges.truncated && !hasWorkspaceChanges(record.partialChanges));
+  const noChanges = Boolean(record.partialWorkspaceChanges && !record.partialWorkspaceChanges.truncated && !hasWorkspaceChanges(record.partialWorkspaceChanges));
   return record.taskMode === "read_only" && retryableCategory && noChanges && record.retryCount < record.maxRetries;
 }
 

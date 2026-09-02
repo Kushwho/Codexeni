@@ -151,6 +151,8 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
       if (event.is_error === true) {
         interpretation.outcome = "failed";
         interpretation.detail = `${this.displayName} ended with ${typeof event.subtype === "string" ? event.subtype : "an error"}.`;
+        interpretation.failureMessage = interpretation.detail;
+        interpretation.failureSource = "harness";
       } else {
         interpretation.outcome = "succeeded";
       }

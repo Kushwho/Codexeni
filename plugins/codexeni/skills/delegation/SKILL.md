@@ -55,6 +55,8 @@ After `delegate_start` returns a job ID, call `delegate_status` once with `waitS
 - `action: "answer"` — you settle the question yourself and pass `answer`. Use this only when the answer is already supported by the task description or the repository, stays inside the declared scope, and is a reversible implementation detail. Also use it, with `answeredBy: "human"`, to relay an answer a person already gave you outside the tool.
 - `action: "elicit"` — the connected client asks a human directly. Use this for product decisions, scope changes, destructive or irreversible actions, and genuinely ambiguous intent. If the client cannot collect human input, ask the user yourself and relay the reply with `action: "answer"` and `answeredBy: "human"`.
 
+For an eligible timed-out or failed conversation, `delegate_status.continuation.action` is `"resume"`. Call `delegate_respond` with `action: "resume"` and an optional `instruction` to continue the same worker conversation. Polling returns compact events by default; use `eventDetail: "full"` only for debugging.
+
 Never use either action to collect a credential, token, or password; those are configured out of band, and the bridge refuses to elicit them. A job is limited to a small number of clarification rounds, and repeating the same question ends it with an interaction-limit error rather than looping.
 
 Terminal states are `succeeded`, `failed`, `timed_out`, `canceled`, and `orphaned`. On timeout, malformed output, CLI failure, or an orphaned job, report the failure and inspect the workspace before deciding whether a new bounded retry is safe. Use `delegate_cancel` when the user cancels, the scope is exceeded, or the worker is stuck. Do not kill an unrelated process.

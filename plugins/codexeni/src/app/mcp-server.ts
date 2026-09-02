@@ -103,17 +103,18 @@ export function createMcpServer(runtime: BridgeRuntime, deps: McpServerDeps = {}
   });
 
   server.registerTool("delegate_status", {
-    description: "Get a delegated task's status, summary, token usage, changed files, warnings, error category, and recent output events. Pass waitSeconds (up to the bridge's maxStatusWaitSeconds limit) to block this call until the job leaves queued/running instead of returning immediately; call it again with waitSeconds if it is still running. Never try to pause between calls with a shell command — this call already waits, and Claude Code holds it open without costing extra turns.",
+    description: "Get a delegated task's status, success summary or structured failure, token usage, unattributed workspace changes, warnings, continuation state, and recent output events. Events are compact by default; request full only for debugging. Pass waitSeconds (up to the bridge's maxStatusWaitSeconds limit) to block this call until the job leaves queued/running instead of returning immediately.",
     inputSchema: {
       jobId: z.string().uuid(),
       eventLimit: z.number().int().min(1).max(LIMITS.maxEvents).optional(),
+      eventDetail: z.enum(["compact", "full"]).optional().describe("compact is the default polling view; full returns sanitized raw worker events for debugging."),
       waitSeconds: z.number().int().min(0).max(LIMITS.maxStatusWaitSeconds).optional().describe("Block until the job settles (or this many seconds elapse), instead of returning the current status immediately."),
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
-  }, async ({ jobId, eventLimit, waitSeconds }, ctx) => {
+  }, async ({ jobId, eventLimit, eventDetail, waitSeconds }, ctx) => {
     try {
       if (waitSeconds) await runtime.waitForSettled(jobId, waitSeconds * 1_000, ctx.mcpReq.signal);
-      return jsonResult(runtime.getTask(jobId, eventLimit));
+      return jsonResult(runtime.getTask(jobId, eventLimit, eventDetail));
     } catch (error) { return errorResult(error); }
   });
 
@@ -126,18 +127,23 @@ export function createMcpServer(runtime: BridgeRuntime, deps: McpServerDeps = {}
   });
 
   server.registerTool("delegate_respond", {
-    description: "Answer a delegated task that is waiting on a clarification (status \"awaiting_input\" from delegate_status). Use action \"answer\" when the orchestrator can settle the question itself — it is covered by the task description or the repository, stays inside the declared scope, and the choice is a reversible implementation detail — or to relay an answer a human already gave outside this tool; pass answer and optionally answeredBy (defaults to \"orchestrator\"). Use action \"elicit\" for product decisions, scope changes, destructive actions, or genuinely ambiguous intent: it asks the connected client to collect the answer directly from a human, and this call must be retried once that answer comes back. Never use either action to collect credentials or secrets; those are always configured out of band, never through this tool.",
+    description: "Answer a delegated task waiting on a clarification, elicit a human answer, or resume an eligible timed-out or failed worker conversation. Use action \"answer\" with answer for awaiting_input jobs, action \"resume\" with an optional recovery instruction when status.continuation.action is \"resume\", and action \"elicit\" only for a genuine human decision. Never use this tool to collect credentials or secrets.",
     inputSchema: z.object({
       jobId: z.string().uuid(),
-      action: z.enum(["answer", "elicit"]),
+      action: z.enum(["answer", "elicit", "resume"]),
       answer: z.string().min(1).max(LIMITS.maxInputAnswerChars).optional(),
+      instruction: z.string().min(1).max(LIMITS.maxInputAnswerChars).optional(),
       answeredBy: z.enum(["orchestrator", "human"]).optional(),
     }),
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
-  }, async ({ jobId, action, answer, answeredBy }, ctx) => {
+  }, async ({ jobId, action, answer, instruction, answeredBy }, ctx) => {
     if (action === "answer") {
       if (!answer) return jsonResult({ error: "answer is required for action \"answer\"." }, true);
       try { return jsonResult(await runtime.respondTask(jobId, answer, answeredBy ?? "orchestrator")); } catch (error) { return errorResult(error); }
+    }
+
+    if (action === "resume") {
+      try { return jsonResult(await runtime.resumeTask(jobId, instruction)); } catch (error) { return errorResult(error); }
     }
 
     // action === "elicit": no verified state means this is the opening round; a verified state means

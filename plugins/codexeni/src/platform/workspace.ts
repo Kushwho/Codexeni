@@ -1,7 +1,7 @@
 import { readdir, realpath, stat } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { LIMITS } from "../core/limits.js";
-import type { FileChanges, WorkspaceSnapshot } from "../core/types.js";
+import type { FileChanges, WorkspaceSnapshot, WorkspaceChanges } from "../core/types.js";
 
 const EXCLUDED_SNAPSHOT_DIRECTORIES = new Set<string>(LIMITS.excludedSnapshotDirectories);
 
@@ -88,4 +88,19 @@ export function diffSnapshots(before: WorkspaceSnapshot, after: WorkspaceSnapsho
   }
   for (const file of before.keys()) if (!after.has(file)) deleted.push(file);
   return { created: created.sort(), modified: modified.sort(), deleted: deleted.sort(), truncated };
+}
+
+export function describeWorkspaceChanges(
+  changes: FileChanges,
+  snapshotStartedAt: string,
+  snapshotFinishedAt: string,
+  overlappingJobIds: readonly string[],
+): WorkspaceChanges {
+  return {
+    ...changes,
+    attribution: "unattributed_shared_workspace",
+    snapshotStartedAt,
+    snapshotFinishedAt,
+    overlappingJobIds: [...overlappingJobIds],
+  };
 }
