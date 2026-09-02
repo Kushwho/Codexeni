@@ -1,22 +1,25 @@
 {
   "name": "codexeni",
-  "version": "0.1.0",
+  "version": "0.1.0-dev.20260829201950",
   "private": true,
   "type": "module",
-  "description": "Codexeni MCP bridge that delegates coding tasks to the local Antigravity CLI.",
+  "description": "Codexeni MCP bridge that lets one coding harness delegate bounded tasks to another local coding harness.",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/index.js --sourcemap",
+    "build": "tsc -p tsconfig.json --noEmit && esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/index.js --sourcemap",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "pnpm build && node --test --test-concurrency=1 test/runtime.test.mjs",
+    "bump": "node scripts/bump-version.mjs",
+    "check:manifests": "node scripts/bump-version.mjs --check",
+    "test": "pnpm build && node --test --test-concurrency=1 test/runtime.test.mjs test/interactive.test.mjs test/claude-code.test.mjs test/adapters.test.mjs test/bundle.test.mjs",
     "test:fixture": "node --test fixtures/clamp/test/clamp.test.mjs",
     "start": "node dist/index.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.22.0",
-    "zod": "^3.24.2"
+    "@modelcontextprotocol/server": "^2.0.0",
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@types/node": "^22.15.3",

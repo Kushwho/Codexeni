@@ -15,3 +15,6 @@ plugins/codexeni/logs/
 Thumbs.db
 .idea/
 .vscode/
+
+# Personal Claude Code overrides (settings.json is shared; settings.local.json is not)
+.claude/settings.local.json

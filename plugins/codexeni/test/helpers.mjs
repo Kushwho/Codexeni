@@ -6,9 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /**
- * Creates the small subset of ChildProcess used by the bridge.  Each queued
- * scenario is consumed by one spawn call, making lifecycle tests deterministic
- * without an Antigravity install or any shell invocation.
+ * Creates the small subset of ChildProcess used by the bridge. Each queued scenario is
+ * consumed by one spawn call, making lifecycle tests deterministic without an install or shell invocation.
  */
 export function createFakeSpawn(scenarios = []) {
   const calls = [];
@@ -17,6 +16,9 @@ export function createFakeSpawn(scenarios = []) {
     const child = new EventEmitter();
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
+    child.stdin = new PassThrough();
+    const stdinChunks = [];
+    child.stdin.on("data", (chunk) => stdinChunks.push(chunk));
     child.pid = scenario.pid ?? 4242 + calls.length;
     child.exitCode = null;
     child.killed = false;
@@ -28,7 +30,10 @@ export function createFakeSpawn(scenarios = []) {
       }
       return true;
     };
-    calls.push({ command, args, options, child });
+    // `stdin` reflects whatever has been written to the child's stdin so far;
+    // for adapters that pipe the prompt over stdin it is the whole prompt once the pipe closes.
+    const call = { command, args, options, child, get stdin() { return Buffer.concat(stdinChunks).toString("utf8"); } };
+    calls.push(call);
     scenario.onSpawn?.({ command, args, options, child, calls });
     queueMicrotask(() => {
       if (scenario.stdout) child.stdout.write(scenario.stdout);
@@ -95,4 +100,51 @@ export async function writeWorkspaceFile(root, relativePath, contents) {
   await mkdir(join(file, ".."), { recursive: true });
   await writeFile(file, contents, "utf8");
   return file;
+}
+
+/** Stops a fake spawned child the way a real stopChildImpl would, without touching the OS. */
+export const stopFakeChild = async (child) => {
+  child.kill("SIGTERM");
+};
+
+/**
+ * Build a BridgeRuntime wired to the fake Antigravity adapter for one test. `overrides`
+ * extends the config; `deps` extends runtime dependencies — `deps.spawnImpl` is required by nearly every caller since it's what makes process launches deterministic.
+ */
+export function makeRuntime(bridge, root, overrides = {}, deps = {}) {
+  const config = {
+    allowedRoots: [root],
+    permissionMode: "restricted",
+    defaultHarness: "antigravity",
+    defaultTimeoutSeconds: 1,
+    maxConcurrency: 4,
+    harnesses: {},
+    ...overrides,
+  };
+  const runtime = new bridge.BridgeRuntime({
+    config,
+    stopChildImpl: stopFakeChild,
+    ...deps,
+  });
+  runtime.registerAdapter(new bridge.AntigravityAdapter({ executable: "fake-agy" }));
+  runtime.registerAdapter(new bridge.ClaudeCodeAdapter({ executable: "fake-claude" }));
+  return runtime;
+}
+
+/**
+ * Poll an assertion until it stops throwing — lifecycle transitions land on a child
+ * process's close event, so tests wait on observable state rather than a fixed delay.
+ */
+export async function waitFor(assertion, timeoutMs = 500) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError;
+  while (Date.now() < deadline) {
+    try {
+      return await assertion();
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+  throw lastError ?? new Error("Condition did not become true");
 }

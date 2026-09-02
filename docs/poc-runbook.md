@@ -8,7 +8,7 @@ Start Codex from the repository you want to work in. No bridge environment varia
 codex
 ```
 
-The server prefers optional `AGY_BRIDGE_ALLOWED_ROOTS`, then standard MCP `roots/list`. When neither is available, it canonicalizes the workspace supplied with each task and uses that exact directory as the task boundary. It never substitutes `${PLUGIN_ROOT}` or the MCP server's `process.cwd`. `AGY_BRIDGE_AGY_PATH` is optional when `agy` is not on `PATH`. `full` is the default and passes `--dangerously-skip-permissions`; set `AGY_BRIDGE_PERMISSION_MODE=restricted` to opt out. Workspace checks validate the worker's cwd, while `--sandbox` is passed best-effort and cannot guarantee containment for every tool or platform. Restart Codex after changing any optional environment override.
+The server canonicalizes the exact workspace supplied with every task and uses that directory as the task boundary. `BRIDGE_ALLOWED_ROOTS`, when set, is an additional explicit allow-list; the bridge does not use MCP `roots/list`. It never substitutes `${PLUGIN_ROOT}` or the MCP server's `process.cwd`. `BRIDGE_ANTIGRAVITY_PATH` is optional when `agy` is not on `PATH`. `full` is the default, passing `--dangerously-skip-permissions`; set `BRIDGE_PERMISSION_MODE=restricted` to require per-call approval instead. Workspace checks validate the worker's cwd, while `--sandbox` is passed best-effort and cannot guarantee containment for every tool or platform. Restart Codex after changing any optional environment override.
 
 ## 1. Prerequisite and model gate
 
@@ -69,7 +69,7 @@ After runtime tests pass:
 2. Confirm `plugin.json` references `./skills/` and `./.mcp.json`.
 3. Confirm `.mcp.json` resolves `node ${PLUGIN_ROOT}/dist/index.js`.
 4. Install from the repo-local marketplace in a fresh Codex session.
-5. Call `antigravity_health`, then perform a read-only review request before approving any coding task.
+5. Call `delegate_discover`, then perform a read-only review request before approving any coding task.
 
 Do not publish until a fresh install works without requiring users to build the package and no credential or raw log artifact is included.
 
@@ -85,5 +85,5 @@ Exercise the policy with a test double or documented provider response:
 2. Classify session/disconnect, context, and authentication failures separately and report the required manual repair.
 3. Confirm coding tasks use `taskMode: "coding"` and `maxRetries: 0`; they never auto-retry.
 4. Confirm a no-change `taskMode: "read_only"` task can retry at most twice, bounded, with the same model/account.
-5. Confirm the per-model circuit breaker blocks further attempts after a rate/quota failure until its reported cooldown expires, and that health exposes the active breaker.
+5. Confirm the per-model circuit breaker blocks further attempts after a rate/quota failure until its reported cooldown expires, and that `delegate_discover` exposes the active breaker.
 6. If a coding task partially changes files, inspect the diff and run tests before considering a Luna/Terra fallback. Never retry or fall back over an unreviewed partial workspace.

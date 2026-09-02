@@ -6,7 +6,9 @@ command -v node >/dev/null 2>&1 || {
   exit 1
 }
 
-ANTIGRAVITY_MODEL="${1:-gemini-3.7-flash-high}" \
+BRIDGE_ANTIGRAVITY_MODEL="${1:-gemini-3.7-flash-high}" \
+  BRIDGE_CLAUDE_CODE_PATH="${BRIDGE_CLAUDE_CODE_PATH:-}" \
   node "$(dirname "$0")/check-prerequisites.mjs"
 
 echo "If the check reports that OAuth is unavailable, authenticate with agy's normal interactive login command and run this check again. No token files or token-bearing environment variables were inspected."
+echo "claude (the optional Claude Code worker) is checked too, but a missing or unauthenticated claude never fails this check."

@@ -1,0 +1,28 @@
+{
+  "mcpServers": {
+    "codexeni": {
+      "command": "node",
+      "args": [
+        "./dist/index.js"
+      ],
+      "cwd": ".",
+      "env_vars": [
+        "BRIDGE_ALLOWED_ROOTS",
+        "BRIDGE_PERMISSION_MODE",
+        "BRIDGE_DEFAULT_HARNESS",
+        "BRIDGE_DEFAULT_TIMEOUT_SECONDS",
+        "BRIDGE_MAX_CONCURRENCY",
+        "BRIDGE_ANTIGRAVITY_PATH",
+        "BRIDGE_ANTIGRAVITY_MODEL",
+        "BRIDGE_CLAUDE_CODE_PATH",
+        "BRIDGE_CLAUDE_CODE_MODEL",
+        "AGY_BRIDGE_ALLOWED_ROOTS",
+        "AGY_BRIDGE_AGY_PATH",
+        "AGY_BRIDGE_PERMISSION_MODE",
+        "AGY_BRIDGE_DEFAULT_MODEL",
+        "AGY_BRIDGE_DEFAULT_TIMEOUT_SECONDS",
+        "AGY_BRIDGE_MAX_CONCURRENCY"
+      ]
+    }
+  }
+}
