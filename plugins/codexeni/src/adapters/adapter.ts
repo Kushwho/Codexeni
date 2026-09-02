@@ -29,6 +29,8 @@ export interface TaskLaunch {
   /** The finished worker prompt, preamble included. */
   prompt: string;
   workspace: string;
+  /** Maximum wall-clock duration for this worker invocation. */
+  timeoutSeconds: number;
   model?: string;
   effort: Effort;
   permissionMode: PermissionMode;

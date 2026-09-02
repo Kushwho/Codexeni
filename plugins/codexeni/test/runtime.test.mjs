@@ -393,6 +393,7 @@ test("Antigravity adapter command retains hostile task text as one prompt argume
   const spec = adapter.command({
     prompt: hostileTask,
     workspace: "C:\\safe\\fixture",
+    timeoutSeconds: 900,
     model: "gemini-3.7-flash-high",
     effort: "high",
     permissionMode: "restricted",
@@ -404,6 +405,7 @@ test("Antigravity adapter command retains hostile task text as one prompt argume
   assert.deepEqual(spec.args.slice(0, schemaIndex), [
     "--model", "gemini-3.7-flash-high",
     "--output-format", "stream-json",
+    "--print-timeout", "900s",
     "--sandbox",
     "--mode", "accept-edits",
   ]);
@@ -412,10 +414,10 @@ test("Antigravity adapter command retains hostile task text as one prompt argume
   assert.equal(spec.args.filter((arg) => arg === hostileTask).length, 1);
   assert.ok(!spec.args.includes("--dangerously-skip-permissions"));
 
-  const fullSpec = adapter.command({ prompt: "x", workspace: "w", model: "m", effort: "low", permissionMode: "full", taskMode: "coding" });
+  const fullSpec = adapter.command({ prompt: "x", workspace: "w", timeoutSeconds: 900, model: "m", effort: "low", permissionMode: "full", taskMode: "coding" });
   assert.ok(fullSpec.args.includes("--dangerously-skip-permissions"));
 
-  const readOnlySpec = adapter.command({ prompt: "review", workspace: "w", model: "m", effort: "high", permissionMode: "restricted", taskMode: "read_only" });
+  const readOnlySpec = adapter.command({ prompt: "review", workspace: "w", timeoutSeconds: 900, model: "m", effort: "high", permissionMode: "restricted", taskMode: "read_only" });
   assert.equal(readOnlySpec.args[readOnlySpec.args.indexOf("--mode") + 1], "plan");
 });
 
@@ -425,7 +427,7 @@ test("Antigravity expresses effort through the model slug and never passes --eff
   // `agy` rejects the flag in every case, so it must never be built into the command.
   for (const effort of ["low", "medium", "high"]) {
     for (const model of ["gemini-3.7-flash-high", "claude-sonnet-4-6", undefined]) {
-      const spec = adapter.command({ prompt: "x", workspace: "w", model, effort, permissionMode: "full", taskMode: "coding" });
+      const spec = adapter.command({ prompt: "x", workspace: "w", timeoutSeconds: 900, model, effort, permissionMode: "full", taskMode: "coding" });
       assert.ok(!spec.args.includes("--effort"), `--effort reached agy for model ${model} at effort ${effort}`);
     }
   }

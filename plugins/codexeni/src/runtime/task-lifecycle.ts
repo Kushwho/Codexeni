@@ -43,6 +43,7 @@ export class TaskLifecycle {
         ? buildDelegationPrompt(record.task, record.workspace, record.taskMode)
         : buildContinuationPrompt(continuationAnswer),
       workspace: record.workspace,
+      timeoutSeconds: record.timeoutSeconds,
       model: record.model,
       effort: record.effort,
       permissionMode: record.permissionMode,

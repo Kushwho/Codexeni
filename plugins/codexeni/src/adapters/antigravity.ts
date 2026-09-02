@@ -179,6 +179,7 @@ export class AntigravityAdapter implements HarnessAdapter {
     const args = [
       "--model", input.model ?? this.defaultModel,
       "--output-format", "stream-json",
+      "--print-timeout", `${input.timeoutSeconds}s`,
       "--sandbox",
       "--mode", input.taskMode === "read_only" ? "plan" : "accept-edits",
       "--json-schema", JSON.stringify(ANTIGRAVITY_WORKER_RESULT_SCHEMA),

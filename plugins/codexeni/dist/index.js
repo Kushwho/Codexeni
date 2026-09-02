@@ -786,6 +786,7 @@ var TaskLifecycle = class {
     const spec = adapter.command({
       prompt: continuationAnswer === void 0 ? buildDelegationPrompt(record2.task, record2.workspace, record2.taskMode) : buildContinuationPrompt(continuationAnswer),
       workspace: record2.workspace,
+      timeoutSeconds: record2.timeoutSeconds,
       model: record2.model,
       effort: record2.effort,
       permissionMode: record2.permissionMode,
@@ -34926,6 +34927,8 @@ var AntigravityAdapter = class {
       input2.model ?? this.defaultModel,
       "--output-format",
       "stream-json",
+      "--print-timeout",
+      `${input2.timeoutSeconds}s`,
       "--sandbox",
       "--mode",
       input2.taskMode === "read_only" ? "plan" : "accept-edits",
