@@ -3,7 +3,7 @@
  * runtime owns lifecycle, concurrency, workspace, and retries; an adapter only knows its own CLI's probe, launch, and output shape.
  */
 import type { ToolCallObservation } from "../core/metrics.js";
-import type { Effort, ErrorCategory, Outcome, PermissionMode, TaskMode, Usage, WorkerResult } from "../core/types.js";
+import type { Effort, ErrorCategory, FailureSource, Outcome, PermissionMode, TaskMode, Usage, WorkerResult } from "../core/types.js";
 
 export interface CommandResult {
   ok: boolean;
@@ -56,6 +56,9 @@ export interface Interpretation {
   outcome?: Outcome;
   /** Human-readable reason when the outcome is not "succeeded". */
   detail?: string;
+  /** A concise harness-provided diagnostic for a failed terminal event. */
+  failureMessage?: string;
+  failureSource?: FailureSource;
   /** A validated structured worker result, when the harness emits one. */
   workerResult?: WorkerResult;
   /**

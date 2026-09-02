@@ -8,7 +8,7 @@ import { priceKey, withEstimatedCost } from "../core/pricing.js";
 import { buildDelegationPrompt } from "../core/prompt.js";
 import { redactPotentialSecrets } from "../core/redaction.js";
 import type { InputRequest, JobStatus, SpawnFunction, StopChildFunction, TaskRecord } from "../core/types.js";
-import { diffSnapshots, snapshotWorkspace } from "../platform/workspace.js";
+import { describeWorkspaceChanges, diffSnapshots, snapshotWorkspace } from "../platform/workspace.js";
 import { isRecord, parseJsonLine, sanitizeEventData } from "./events.js";
 import { collectorFor } from "./metrics-collector.js";
 import { dispatchToSinks, type MetricsSink } from "./observability.js";
@@ -36,19 +36,19 @@ export interface TaskLifecycleDependencies {
 export class TaskLifecycle {
   public constructor(private readonly dependencies: TaskLifecycleDependencies) {}
 
-  public launch(record: TaskRecord, continuationAnswer?: string): void {
+  public launch(record: TaskRecord, continuationPrompt?: string): void {
     const adapter = this.dependencies.getAdapter(record.harness);
     const spec = adapter.command({
-      prompt: continuationAnswer === undefined
+      prompt: continuationPrompt === undefined
         ? buildDelegationPrompt(record.task, record.workspace, record.taskMode)
-        : buildContinuationPrompt(continuationAnswer),
+        : continuationPrompt,
       workspace: record.workspace,
       timeoutSeconds: record.timeoutSeconds,
       model: record.model,
       effort: record.effort,
       permissionMode: record.permissionMode,
       taskMode: record.taskMode,
-      conversationId: continuationAnswer === undefined ? undefined : record.conversationId,
+      conversationId: continuationPrompt === undefined ? undefined : record.conversationId,
     });
     let child: ChildProcess;
     try {
@@ -148,6 +148,12 @@ export class TaskLifecycle {
       record.outcome = fields.outcome;
       record.outcomeDetail = fields.detail;
     }
+    if (fields.failureMessage) {
+      record.failure = {
+        message: redactPotentialSecrets(fields.failureMessage),
+        source: fields.failureSource ?? "harness",
+      };
+    }
     if (fields.workerResult) {
       if (fields.workerResult.status === "input_required") {
         const inputRequest = normalizeInputRequest(fields.workerResult);
@@ -165,11 +171,12 @@ export class TaskLifecycle {
     if (typeof fields.turns === "number") record.turns = fields.turns;
   }
 
-  /** Resume a worker after a validated answer has been accepted by the runtime. */
-  public resume(record: TaskRecord, answer: string): void {
+  /** Resume a worker conversation after a clarification or terminal recovery request. */
+  public resume(record: TaskRecord, instruction: string, kind: "answer" | "resume"): void {
     record.inputRequest = undefined;
     record.outcome = undefined;
     record.outcomeDetail = undefined;
+    record.failure = undefined;
     record.errorCategory = undefined;
     record.retryable = false;
     record.nextRetryAt = undefined;
@@ -180,7 +187,13 @@ export class TaskLifecycle {
     record.timeoutHandle = undefined;
     record.forcedTerminalStatus = undefined;
     record.cancellationRequested = false;
-    this.launch(record, answer);
+    record.stderrSummary = "";
+    record.summary = undefined;
+    record.workspaceChanges = undefined;
+    record.partialWorkspaceChanges = undefined;
+    record.status = "queued";
+    const prompt = kind === "answer" ? buildContinuationPrompt(instruction) : buildRecoveryPrompt(instruction);
+    this.launch(record, prompt);
   }
 
   /** Finalize a task that is waiting for input without trying to spawn or stop a child. */
@@ -198,11 +211,17 @@ export class TaskLifecycle {
       if (record.beforeSnapshot) {
         const after = await snapshotWorkspace(record.workspace);
         const changes = diffSnapshots(record.beforeSnapshot, after.snapshot, after.truncated);
+        const workspaceChanges = describeWorkspaceChanges(
+          changes,
+          record.workspaceSnapshotStartedAt ?? record.createdAt,
+          this.dependencies.now().toISOString(),
+          record.overlappingJobIds,
+        );
         if (status === "awaiting_input") {
-          record.partialChanges = changes;
+          record.partialWorkspaceChanges = workspaceChanges;
         } else {
-          record.fileChanges = changes;
-          record.partialChanges = status === "failed" || status === "timed_out" ? changes : undefined;
+          record.workspaceChanges = workspaceChanges;
+          record.partialWorkspaceChanges = status === "failed" || status === "timed_out" ? workspaceChanges : undefined;
         }
         if (after.truncated) record.warnings.push("Post-task file snapshot reached its entry limit; change detection is partial.");
       }
@@ -228,6 +247,7 @@ export class TaskLifecycle {
     // applyFailurePolicy may have requeued the job for a retry — not actually finished yet,
     // so only a truly terminal status is reported. The collector carries over, nothing is lost.
     if (TERMINAL_STATUSES.includes(record.status)) {
+      this.ensureFailure(record);
       const metrics = collectorFor(record).build(record);
       dispatchToSinks(this.dependencies.metricsSinks, metrics);
     }
@@ -310,8 +330,9 @@ export class TaskLifecycle {
       record.timeoutHandle = undefined;
       record.forcedTerminalStatus = undefined;
       record.cancellationRequested = false;
-      record.fileChanges = undefined;
-      record.partialChanges = undefined;
+      record.failure = undefined;
+      record.workspaceChanges = undefined;
+      record.partialWorkspaceChanges = undefined;
       record.errorCategory = undefined;
       record.retryable = false;
       record.nextRetryAt = undefined;
@@ -325,6 +346,24 @@ export class TaskLifecycle {
       record.retryable = false;
     }
   }
+
+  private ensureFailure(record: TaskRecord): void {
+    if (record.status !== "failed" && record.status !== "timed_out") return;
+    const fallback = record.status === "timed_out"
+      ? "Task exceeded its configured timeout."
+      : record.outcomeDetail ?? `Worker process exited with code ${record.exitCode ?? "unknown"}.`;
+    const failure = record.failure ?? {
+      message: fallback,
+      source: record.status === "timed_out" ? "bridge" as const : "process" as const,
+    };
+    record.failure = {
+      ...failure,
+      category: record.errorCategory,
+      exitCode: record.exitCode,
+      signal: record.signal,
+    };
+    if (!record.stderrSummary.trim()) record.stderrSummary = failure.message;
+  }
 }
 
 function buildContinuationPrompt(answer: string): string {
@@ -333,6 +372,15 @@ function buildContinuationPrompt(answer: string): string {
     "Use the answer below; do not ask the same question again. Return the required structured result when finished or when genuinely blocked.",
     "ANSWER:",
     answer,
+  ].join("\n");
+}
+
+function buildRecoveryPrompt(instruction: string): string {
+  return [
+    "Resume the existing task from the current workspace state.",
+    "Review any work already completed, then continue toward the original task's stop condition. Return the required structured result when finished or genuinely blocked.",
+    "RECOVERY INSTRUCTION:",
+    instruction,
   ].join("\n");
 }
 

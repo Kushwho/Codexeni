@@ -65,6 +65,14 @@ export interface FileChanges {
   truncated: boolean;
 }
 
+/** A workspace snapshot delta that cannot be attributed to one writer in a shared workspace. */
+export interface WorkspaceChanges extends FileChanges {
+  attribution: "unattributed_shared_workspace";
+  snapshotStartedAt: string;
+  snapshotFinishedAt: string;
+  overlappingJobIds: string[];
+}
+
 /**
  * Token and cost figures normalized across harnesses. Every field is optional because
  * harnesses report different subsets — Claude Code reports a cost, Antigravity reports tokens only.
@@ -84,6 +92,17 @@ export interface Usage {
    * price table must never be summed or compared without this flag.
    */
   costSource?: "harness" | "estimated";
+}
+
+export type FailureSource = "bridge" | "harness" | "process";
+
+/** A concise, normalized terminal diagnostic; raw stderr and logs remain supplementary. */
+export interface JobFailure {
+  message: string;
+  source: FailureSource;
+  category?: ErrorCategory;
+  exitCode?: number | null;
+  signal?: NodeJS.Signals | null;
 }
 
 /** A rate-limit or quota block. Keyed by harness and model because the same model can sit behind different quotas. */
@@ -160,12 +179,15 @@ export interface TaskRecord {
   turns?: number;
   outcome?: Outcome;
   outcomeDetail?: string;
+  failure?: JobFailure;
   stderrSummary: string;
   logPath: string;
   events: StreamEvent[];
   warnings: string[];
-  fileChanges?: FileChanges;
-  partialChanges?: FileChanges;
+  workspaceChanges?: WorkspaceChanges;
+  partialWorkspaceChanges?: WorkspaceChanges;
+  workspaceSnapshotStartedAt?: string;
+  overlappingJobIds: string[];
   child?: ChildProcess;
   timeoutHandle?: NodeJS.Timeout;
   retryHandle?: NodeJS.Timeout;

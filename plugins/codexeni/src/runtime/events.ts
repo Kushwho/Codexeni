@@ -1,6 +1,6 @@
 import { LIMITS } from "../core/limits.js";
 import { redactPotentialSecrets, SENSITIVE_FIELD_NAME } from "../core/redaction.js";
-import type { FileChanges, StreamEvent, TaskRecord } from "../core/types.js";
+import type { StreamEvent, TaskRecord, WorkspaceChanges } from "../core/types.js";
 import { isRecord } from "../core/value.js";
 import { collectorFor, computeDurationMs } from "./metrics-collector.js";
 
@@ -36,12 +36,58 @@ export function parseJsonLine(line: string, timestamp: string): StreamEvent | un
   }
 }
 
-export function hasWorkspaceChanges(changes: FileChanges | undefined): boolean {
+export type EventDetail = "compact" | "full";
+
+const COMPACT_EVENT_TEXT_CHARS = 1_000;
+
+export function hasWorkspaceChanges(changes: WorkspaceChanges | undefined): boolean {
   return Boolean(changes && (changes.created.length || changes.modified.length || changes.deleted.length));
 }
 
+function compactText(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  return value.length > COMPACT_EVENT_TEXT_CHARS ? `${value.slice(0, COMPACT_EVENT_TEXT_CHARS)}â€¦` : value;
+}
+
+function compactEvent(event: StreamEvent): Record<string, unknown> {
+  const compact: Record<string, unknown> = { timestamp: event.timestamp, type: event.type };
+  if (!isRecord(event.data)) {
+    const message = compactText(event.data);
+    if (message) compact.message = message;
+    return compact;
+  }
+
+  const candidates = [event.data, event.data.result, event.data.message, event.data.step_update].filter(isRecord);
+  for (const candidate of candidates) {
+    if (compact.status === undefined && typeof candidate.status === "string") compact.status = candidate.status;
+    if (compact.conversationId === undefined) {
+      const conversationId = candidate.conversation_id ?? candidate.conversationId ?? candidate.session_id;
+      if (typeof conversationId === "string") compact.conversationId = conversationId;
+    }
+    if (compact.message === undefined) {
+      const message = compactText(candidate.text ?? candidate.response ?? candidate.message ?? candidate.content);
+      if (message) compact.message = message;
+    }
+    if (compact.error === undefined) {
+      const error = candidate.error;
+      let errorValue: unknown;
+      if (typeof error === "string") errorValue = error;
+      else if (isRecord(error)) errorValue = error.message;
+      const message = compactText(errorValue);
+      if (message) compact.error = message;
+    }
+    if (compact.tool === undefined) {
+      const tool = candidate.tool_name ?? (isRecord(candidate.tool_info) ? candidate.tool_info.name : undefined);
+      if (typeof tool === "string") compact.tool = tool;
+    }
+    if (compact.toolState === undefined && typeof candidate.state === "string") compact.toolState = candidate.state;
+  }
+  return compact;
+}
+
 /** The harness-neutral view of a job returned to the orchestrator. */
-export function compactRecord(record: TaskRecord, eventLimit: number, continuationSupported?: boolean): Record<string, unknown> {
+export function compactRecord(record: TaskRecord, eventLimit: number, eventDetail: EventDetail, continuationSupported: boolean): Record<string, unknown> {
+  const continuation = continuationStatus(record, continuationSupported);
   return {
     jobId: record.id,
     harness: record.harness,
@@ -52,12 +98,13 @@ export function compactRecord(record: TaskRecord, eventLimit: number, continuati
     // Defensive copy so a caller mutating the response cannot touch runtime state.
     inputRequest: record.inputRequest ? { ...record.inputRequest, options: record.inputRequest.options ? [...record.inputRequest.options] : undefined } : undefined,
     interactionRound: { current: record.inputRounds, max: LIMITS.maxInputRounds, remaining: Math.max(0, LIMITS.maxInputRounds - record.inputRounds) },
-    continuationSupported,
-    fileChanges: record.fileChanges,
-    partialChanges: record.partialChanges,
-    hasPartialChanges: hasWorkspaceChanges(record.partialChanges),
+    continuation,
+    workspaceChanges: record.workspaceChanges,
+    partialWorkspaceChanges: record.partialWorkspaceChanges,
+    hasPartialWorkspaceChanges: hasWorkspaceChanges(record.partialWorkspaceChanges),
     warnings: record.warnings,
     errorCategory: record.errorCategory,
+    failure: record.failure,
     outcome: record.outcome,
     sessionId: record.sessionId,
     workspace: record.workspace,
@@ -78,8 +125,16 @@ export function compactRecord(record: TaskRecord, eventLimit: number, continuati
     signal: record.signal,
     stderrSummary: record.stderrSummary,
     logPath: record.logPath,
-    events: record.events.slice(-eventLimit),
+    events: eventDetail === "full" ? record.events.slice(-eventLimit) : record.events.slice(-eventLimit).map(compactEvent),
     // Live snapshot: accurate mid-run, not just at finalize, since nothing here mutates on read.
     metrics: collectorFor(record).build(record),
   };
+}
+
+function continuationStatus(record: TaskRecord, supported: boolean): Record<string, unknown> {
+  if (!supported) return { supported: false, available: false, reason: "This harness does not support conversation continuation." };
+  if (!record.conversationId) return { supported: true, available: false, reason: "The worker did not report a conversation ID." };
+  if (record.status === "awaiting_input" && record.inputRequest) return { supported: true, available: true, action: "answer" };
+  if (record.status === "failed" || record.status === "timed_out") return { supported: true, available: true, action: "resume" };
+  return { supported: true, available: false, reason: "Continuation is available only while awaiting input or after a failure or timeout." };
 }

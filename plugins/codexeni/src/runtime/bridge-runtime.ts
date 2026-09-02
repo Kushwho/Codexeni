@@ -13,7 +13,7 @@ import type { AllowedRootSource, BridgeConfig, CircuitBreaker, Effort, InputRequ
 import { DEFAULT_HARNESS, resolveBridgeConfig, resolveMetricsFilePath, resolvePriceTable } from "../platform/config.js";
 import { captureCommand, stopChildProcess } from "../platform/process.js";
 import { WorkspaceGuard, canonicalizeWorkspace, snapshotWorkspace } from "../platform/workspace.js";
-import { compactRecord, redactPotentialSecrets } from "./events.js";
+import { compactRecord, redactPotentialSecrets, type EventDetail } from "./events.js";
 import { DiscoveryCache } from "./discovery.js";
 import { MemoryAggregator, NdjsonSink, type MetricsSink } from "./observability.js";
 import { TaskLifecycle } from "./task-lifecycle.js";
@@ -189,6 +189,10 @@ export class BridgeRuntime {
     if (active.length >= this.config.maxConcurrency) throw new Error(`Maximum concurrency (${this.config.maxConcurrency}) reached.`);
 
     const id = this.createId();
+    const overlappingJobs = active.filter((job) => job.workspace === workspace);
+    for (const job of overlappingJobs) {
+      if (!job.overlappingJobIds.includes(id)) job.overlappingJobIds.push(id);
+    }
     const folder = await this.mkdtempImpl(join(tmpdir(), "codexeni-"));
     this.tempDirs.add(folder);
     const record: TaskRecord = {
@@ -206,6 +210,7 @@ export class BridgeRuntime {
       inputRounds: 0,
       inputQuestionHistory: [],
       retryable: false,
+      overlappingJobIds: overlappingJobs.map((job) => job.id),
       status: "queued",
       createdAt: this.now().toISOString(),
       stderrSummary: "",
@@ -213,19 +218,21 @@ export class BridgeRuntime {
       events: [],
       warnings: [
         ...(selection.warning ? [selection.warning] : []),
-        ...(active.some((job) => job.workspace === workspace) ? ["Another job is already writing to this workspace; changes may overlap."] : []),
+        ...(overlappingJobs.length ? ["Another job is already writing to this workspace; workspace changes cannot be attributed to one job."] : []),
       ],
     };
     this.jobs.set(id, record);
     try {
       const initial = await snapshotWorkspace(workspace);
       record.beforeSnapshot = initial.snapshot;
+      record.workspaceSnapshotStartedAt = this.now().toISOString();
       if (initial.truncated) record.warnings.push("Pre-task file snapshot reached its entry limit; change detection is partial.");
       this.lifecycle.launch(record);
     } catch (error) {
       record.status = "failed";
       record.finishedAt = this.now().toISOString();
       record.stderrSummary = error instanceof Error ? error.message : String(error);
+      record.failure = { message: redactPotentialSecrets(record.stderrSummary), source: "bridge" };
     }
     return { jobId: id, harness: record.harness, status: record.status, warnings: record.warnings, workspace, model: record.model, taskMode: record.taskMode, maxRetries: record.maxRetries };
   }
@@ -234,13 +241,13 @@ export class BridgeRuntime {
     return this.allowedRootSource;
   }
 
-  public getTask(jobId: string, eventLimit = 50): Record<string, unknown> {
+  public getTask(jobId: string, eventLimit = 50, eventDetail: EventDetail = "compact"): Record<string, unknown> {
     const record = this.jobs.get(jobId);
     if (!record) throw new Error(`Unknown job ID: ${jobId}`);
     // Look up directly rather than getAdapter(), which throws: a job whose adapter was
     // unregistered since it ran must still be inspectable.
     const continuationSupported = this.adapters.get(record.harness)?.supportsContinuation === true;
-    return compactRecord(record, Math.max(1, Math.min(eventLimit, LIMITS.maxEvents)), continuationSupported);
+    return compactRecord(record, Math.max(1, Math.min(eventLimit, LIMITS.maxEvents)), eventDetail, continuationSupported);
   }
 
   /**
@@ -303,7 +310,7 @@ export class BridgeRuntime {
 
     record.inputRounds += 1;
     record.warnings.push(`Clarification round ${record.inputRounds} answered by ${answeredBy}.`);
-    this.lifecycle.resume(record, answer.trim());
+    this.lifecycle.resume(record, answer.trim(), "answer");
     return {
       jobId,
       status: record.status,
@@ -311,6 +318,25 @@ export class BridgeRuntime {
       inputRounds: record.inputRounds,
       maxInputRounds: LIMITS.maxInputRounds,
     };
+  }
+
+  /** Resume a failed or timed-out worker conversation without requiring an input request. */
+  public async resumeTask(jobId: string, instruction?: string): Promise<Record<string, unknown>> {
+    const record = this.jobs.get(jobId);
+    if (!record) throw new Error(`Unknown job ID: ${jobId}`);
+    if (record.status !== "failed" && record.status !== "timed_out") throw new Error(`Job ${jobId} is not failed or timed out.`);
+    if (instruction !== undefined && (!instruction.trim() || instruction.length > LIMITS.maxInputAnswerChars)) {
+      throw new Error(`instruction must be a non-empty string no more than ${LIMITS.maxInputAnswerChars} characters.`);
+    }
+    const adapter = this.getAdapter(record.harness);
+    if (adapter.supportsContinuation !== true || !record.conversationId) throw new Error(`Harness ${record.harness} cannot resume this task because no worker conversation is available.`);
+    if (this.activeJobs().length >= this.config.maxConcurrency) throw new Error(`Maximum concurrency (${this.config.maxConcurrency}) reached; retry this resume after an active job finishes.`);
+    this.assertModelAvailable(record.harness, record.model);
+
+    const recoveryInstruction = instruction?.trim() ?? "Continue the original task from the current workspace state.";
+    record.warnings.push("Task resumed after a terminal failure or timeout.");
+    this.lifecycle.resume(record, recoveryInstruction, "resume");
+    return { jobId, status: record.status, conversationId: record.conversationId };
   }
 
   public async cancelTask(jobId: string): Promise<Record<string, unknown>> {

@@ -512,6 +512,15 @@ function diffSnapshots(before, after, truncated = false) {
   for (const file2 of before.keys()) if (!after.has(file2)) deleted.push(file2);
   return { created: created.sort(), modified: modified.sort(), deleted: deleted.sort(), truncated };
 }
+function describeWorkspaceChanges(changes, snapshotStartedAt, snapshotFinishedAt, overlappingJobIds) {
+  return {
+    ...changes,
+    attribution: "unattributed_shared_workspace",
+    snapshotStartedAt,
+    snapshotFinishedAt,
+    overlappingJobIds: [...overlappingJobIds]
+  };
+}
 
 // src/runtime/metrics-collector.ts
 var TaskMetricsCollector = class {
@@ -554,7 +563,7 @@ var TaskMetricsCollector = class {
     const startedMs = record2.startedAt ? new Date(record2.startedAt).getTime() : void 0;
     const finishedMs = record2.finishedAt ? new Date(record2.finishedAt).getTime() : Date.now();
     const effectiveStartMs = startedMs ?? createdMs;
-    const changes = record2.fileChanges ?? record2.partialChanges;
+    const changes = record2.workspaceChanges ?? record2.partialWorkspaceChanges;
     return {
       schemaVersion: 1,
       jobId: record2.id,
@@ -623,10 +632,50 @@ function parseJsonLine(line, timestamp) {
     return { timestamp, type: "unparsed_output", data: trimmed.slice(0, LIMITS.maxEventChars) };
   }
 }
+var COMPACT_EVENT_TEXT_CHARS = 1e3;
 function hasWorkspaceChanges(changes) {
   return Boolean(changes && (changes.created.length || changes.modified.length || changes.deleted.length));
 }
-function compactRecord(record2, eventLimit, continuationSupported) {
+function compactText(value) {
+  if (typeof value !== "string") return void 0;
+  return value.length > COMPACT_EVENT_TEXT_CHARS ? `${value.slice(0, COMPACT_EVENT_TEXT_CHARS)}\xE2\u20AC\xA6` : value;
+}
+function compactEvent(event) {
+  const compact = { timestamp: event.timestamp, type: event.type };
+  if (!isRecord(event.data)) {
+    const message = compactText(event.data);
+    if (message) compact.message = message;
+    return compact;
+  }
+  const candidates = [event.data, event.data.result, event.data.message, event.data.step_update].filter(isRecord);
+  for (const candidate of candidates) {
+    if (compact.status === void 0 && typeof candidate.status === "string") compact.status = candidate.status;
+    if (compact.conversationId === void 0) {
+      const conversationId = candidate.conversation_id ?? candidate.conversationId ?? candidate.session_id;
+      if (typeof conversationId === "string") compact.conversationId = conversationId;
+    }
+    if (compact.message === void 0) {
+      const message = compactText(candidate.text ?? candidate.response ?? candidate.message ?? candidate.content);
+      if (message) compact.message = message;
+    }
+    if (compact.error === void 0) {
+      const error61 = candidate.error;
+      let errorValue;
+      if (typeof error61 === "string") errorValue = error61;
+      else if (isRecord(error61)) errorValue = error61.message;
+      const message = compactText(errorValue);
+      if (message) compact.error = message;
+    }
+    if (compact.tool === void 0) {
+      const tool = candidate.tool_name ?? (isRecord(candidate.tool_info) ? candidate.tool_info.name : void 0);
+      if (typeof tool === "string") compact.tool = tool;
+    }
+    if (compact.toolState === void 0 && typeof candidate.state === "string") compact.toolState = candidate.state;
+  }
+  return compact;
+}
+function compactRecord(record2, eventLimit, eventDetail, continuationSupported) {
+  const continuation = continuationStatus(record2, continuationSupported);
   return {
     jobId: record2.id,
     harness: record2.harness,
@@ -637,12 +686,13 @@ function compactRecord(record2, eventLimit, continuationSupported) {
     // Defensive copy so a caller mutating the response cannot touch runtime state.
     inputRequest: record2.inputRequest ? { ...record2.inputRequest, options: record2.inputRequest.options ? [...record2.inputRequest.options] : void 0 } : void 0,
     interactionRound: { current: record2.inputRounds, max: LIMITS.maxInputRounds, remaining: Math.max(0, LIMITS.maxInputRounds - record2.inputRounds) },
-    continuationSupported,
-    fileChanges: record2.fileChanges,
-    partialChanges: record2.partialChanges,
-    hasPartialChanges: hasWorkspaceChanges(record2.partialChanges),
+    continuation,
+    workspaceChanges: record2.workspaceChanges,
+    partialWorkspaceChanges: record2.partialWorkspaceChanges,
+    hasPartialWorkspaceChanges: hasWorkspaceChanges(record2.partialWorkspaceChanges),
     warnings: record2.warnings,
     errorCategory: record2.errorCategory,
+    failure: record2.failure,
     outcome: record2.outcome,
     sessionId: record2.sessionId,
     workspace: record2.workspace,
@@ -663,10 +713,17 @@ function compactRecord(record2, eventLimit, continuationSupported) {
     signal: record2.signal,
     stderrSummary: record2.stderrSummary,
     logPath: record2.logPath,
-    events: record2.events.slice(-eventLimit),
+    events: eventDetail === "full" ? record2.events.slice(-eventLimit) : record2.events.slice(-eventLimit).map(compactEvent),
     // Live snapshot: accurate mid-run, not just at finalize, since nothing here mutates on read.
     metrics: collectorFor(record2).build(record2)
   };
+}
+function continuationStatus(record2, supported) {
+  if (!supported) return { supported: false, available: false, reason: "This harness does not support conversation continuation." };
+  if (!record2.conversationId) return { supported: true, available: false, reason: "The worker did not report a conversation ID." };
+  if (record2.status === "awaiting_input" && record2.inputRequest) return { supported: true, available: true, action: "answer" };
+  if (record2.status === "failed" || record2.status === "timed_out") return { supported: true, available: true, action: "resume" };
+  return { supported: true, available: false, reason: "Continuation is available only while awaiting input or after a failure or timeout." };
 }
 
 // src/runtime/discovery.ts
@@ -765,7 +822,7 @@ var NdjsonSink = class {
 // src/runtime/retry-policy.ts
 function mayRetry(record2) {
   const retryableCategory = record2.errorCategory === "rate_limited" || record2.errorCategory === "session_limit" || record2.errorCategory === "upstream_error";
-  const noChanges = Boolean(record2.partialChanges && !record2.partialChanges.truncated && !hasWorkspaceChanges(record2.partialChanges));
+  const noChanges = Boolean(record2.partialWorkspaceChanges && !record2.partialWorkspaceChanges.truncated && !hasWorkspaceChanges(record2.partialWorkspaceChanges));
   return record2.taskMode === "read_only" && retryableCategory && noChanges && record2.retryCount < record2.maxRetries;
 }
 function retryBackoffMs(retryCount, random) {
@@ -781,17 +838,17 @@ var TaskLifecycle = class {
   constructor(dependencies) {
     this.dependencies = dependencies;
   }
-  launch(record2, continuationAnswer) {
+  launch(record2, continuationPrompt) {
     const adapter = this.dependencies.getAdapter(record2.harness);
     const spec = adapter.command({
-      prompt: continuationAnswer === void 0 ? buildDelegationPrompt(record2.task, record2.workspace, record2.taskMode) : buildContinuationPrompt(continuationAnswer),
+      prompt: continuationPrompt === void 0 ? buildDelegationPrompt(record2.task, record2.workspace, record2.taskMode) : continuationPrompt,
       workspace: record2.workspace,
       timeoutSeconds: record2.timeoutSeconds,
       model: record2.model,
       effort: record2.effort,
       permissionMode: record2.permissionMode,
       taskMode: record2.taskMode,
-      conversationId: continuationAnswer === void 0 ? void 0 : record2.conversationId
+      conversationId: continuationPrompt === void 0 ? void 0 : record2.conversationId
     });
     let child;
     try {
@@ -891,6 +948,12 @@ ${sanitized}`);
       record2.outcome = fields.outcome;
       record2.outcomeDetail = fields.detail;
     }
+    if (fields.failureMessage) {
+      record2.failure = {
+        message: redactPotentialSecrets(fields.failureMessage),
+        source: fields.failureSource ?? "harness"
+      };
+    }
     if (fields.workerResult) {
       if (fields.workerResult.status === "input_required") {
         const inputRequest = normalizeInputRequest(fields.workerResult);
@@ -905,11 +968,12 @@ ${sanitized}`);
     }
     if (typeof fields.turns === "number") record2.turns = fields.turns;
   }
-  /** Resume a worker after a validated answer has been accepted by the runtime. */
-  resume(record2, answer) {
+  /** Resume a worker conversation after a clarification or terminal recovery request. */
+  resume(record2, instruction, kind) {
     record2.inputRequest = void 0;
     record2.outcome = void 0;
     record2.outcomeDetail = void 0;
+    record2.failure = void 0;
     record2.errorCategory = void 0;
     record2.retryable = false;
     record2.nextRetryAt = void 0;
@@ -920,7 +984,13 @@ ${sanitized}`);
     record2.timeoutHandle = void 0;
     record2.forcedTerminalStatus = void 0;
     record2.cancellationRequested = false;
-    this.launch(record2, answer);
+    record2.stderrSummary = "";
+    record2.summary = void 0;
+    record2.workspaceChanges = void 0;
+    record2.partialWorkspaceChanges = void 0;
+    record2.status = "queued";
+    const prompt = kind === "answer" ? buildContinuationPrompt(instruction) : buildRecoveryPrompt(instruction);
+    this.launch(record2, prompt);
   }
   /** Finalize a task that is waiting for input without trying to spawn or stop a child. */
   async cancelAwaitingInput(record2) {
@@ -937,11 +1007,17 @@ ${detail}`);
       if (record2.beforeSnapshot) {
         const after = await snapshotWorkspace(record2.workspace);
         const changes = diffSnapshots(record2.beforeSnapshot, after.snapshot, after.truncated);
+        const workspaceChanges = describeWorkspaceChanges(
+          changes,
+          record2.workspaceSnapshotStartedAt ?? record2.createdAt,
+          this.dependencies.now().toISOString(),
+          record2.overlappingJobIds
+        );
         if (status === "awaiting_input") {
-          record2.partialChanges = changes;
+          record2.partialWorkspaceChanges = workspaceChanges;
         } else {
-          record2.fileChanges = changes;
-          record2.partialChanges = status === "failed" || status === "timed_out" ? changes : void 0;
+          record2.workspaceChanges = workspaceChanges;
+          record2.partialWorkspaceChanges = status === "failed" || status === "timed_out" ? workspaceChanges : void 0;
         }
         if (after.truncated) record2.warnings.push("Post-task file snapshot reached its entry limit; change detection is partial.");
       }
@@ -965,6 +1041,7 @@ ${detail}`);
       }
     }
     if (TERMINAL_STATUSES.includes(record2.status)) {
+      this.ensureFailure(record2);
       const metrics = collectorFor(record2).build(record2);
       dispatchToSinks(this.dependencies.metricsSinks, metrics);
     }
@@ -1048,8 +1125,9 @@ Worker repeated the same clarification question after an answer.`);
       record2.timeoutHandle = void 0;
       record2.forcedTerminalStatus = void 0;
       record2.cancellationRequested = false;
-      record2.fileChanges = void 0;
-      record2.partialChanges = void 0;
+      record2.failure = void 0;
+      record2.workspaceChanges = void 0;
+      record2.partialWorkspaceChanges = void 0;
       record2.errorCategory = void 0;
       record2.retryable = false;
       record2.nextRetryAt = void 0;
@@ -1064,6 +1142,21 @@ Retry setup failed: ${error61 instanceof Error ? error61.message : String(error6
       record2.retryable = false;
     }
   }
+  ensureFailure(record2) {
+    if (record2.status !== "failed" && record2.status !== "timed_out") return;
+    const fallback = record2.status === "timed_out" ? "Task exceeded its configured timeout." : record2.outcomeDetail ?? `Worker process exited with code ${record2.exitCode ?? "unknown"}.`;
+    const failure = record2.failure ?? {
+      message: fallback,
+      source: record2.status === "timed_out" ? "bridge" : "process"
+    };
+    record2.failure = {
+      ...failure,
+      category: record2.errorCategory,
+      exitCode: record2.exitCode,
+      signal: record2.signal
+    };
+    if (!record2.stderrSummary.trim()) record2.stderrSummary = failure.message;
+  }
 };
 function buildContinuationPrompt(answer) {
   return [
@@ -1071,6 +1164,14 @@ function buildContinuationPrompt(answer) {
     "Use the answer below; do not ask the same question again. Return the required structured result when finished or when genuinely blocked.",
     "ANSWER:",
     answer
+  ].join("\n");
+}
+function buildRecoveryPrompt(instruction) {
+  return [
+    "Resume the existing task from the current workspace state.",
+    "Review any work already completed, then continue toward the original task's stop condition. Return the required structured result when finished or genuinely blocked.",
+    "RECOVERY INSTRUCTION:",
+    instruction
   ].join("\n");
 }
 function normalizeInputRequest(result) {
@@ -1231,6 +1332,10 @@ var BridgeRuntime = class {
     const active = this.activeJobs();
     if (active.length >= this.config.maxConcurrency) throw new Error(`Maximum concurrency (${this.config.maxConcurrency}) reached.`);
     const id = this.createId();
+    const overlappingJobs = active.filter((job) => job.workspace === workspace);
+    for (const job of overlappingJobs) {
+      if (!job.overlappingJobIds.includes(id)) job.overlappingJobIds.push(id);
+    }
     const folder = await this.mkdtempImpl(join2(tmpdir(), "codexeni-"));
     this.tempDirs.add(folder);
     const record2 = {
@@ -1248,6 +1353,7 @@ var BridgeRuntime = class {
       inputRounds: 0,
       inputQuestionHistory: [],
       retryable: false,
+      overlappingJobIds: overlappingJobs.map((job) => job.id),
       status: "queued",
       createdAt: this.now().toISOString(),
       stderrSummary: "",
@@ -1255,30 +1361,32 @@ var BridgeRuntime = class {
       events: [],
       warnings: [
         ...selection.warning ? [selection.warning] : [],
-        ...active.some((job) => job.workspace === workspace) ? ["Another job is already writing to this workspace; changes may overlap."] : []
+        ...overlappingJobs.length ? ["Another job is already writing to this workspace; workspace changes cannot be attributed to one job."] : []
       ]
     };
     this.jobs.set(id, record2);
     try {
       const initial = await snapshotWorkspace(workspace);
       record2.beforeSnapshot = initial.snapshot;
+      record2.workspaceSnapshotStartedAt = this.now().toISOString();
       if (initial.truncated) record2.warnings.push("Pre-task file snapshot reached its entry limit; change detection is partial.");
       this.lifecycle.launch(record2);
     } catch (error61) {
       record2.status = "failed";
       record2.finishedAt = this.now().toISOString();
       record2.stderrSummary = error61 instanceof Error ? error61.message : String(error61);
+      record2.failure = { message: redactPotentialSecrets(record2.stderrSummary), source: "bridge" };
     }
     return { jobId: id, harness: record2.harness, status: record2.status, warnings: record2.warnings, workspace, model: record2.model, taskMode: record2.taskMode, maxRetries: record2.maxRetries };
   }
   getAllowedRootSource() {
     return this.allowedRootSource;
   }
-  getTask(jobId, eventLimit = 50) {
+  getTask(jobId, eventLimit = 50, eventDetail = "compact") {
     const record2 = this.jobs.get(jobId);
     if (!record2) throw new Error(`Unknown job ID: ${jobId}`);
     const continuationSupported = this.adapters.get(record2.harness)?.supportsContinuation === true;
-    return compactRecord(record2, Math.max(1, Math.min(eventLimit, LIMITS.maxEvents)), continuationSupported);
+    return compactRecord(record2, Math.max(1, Math.min(eventLimit, LIMITS.maxEvents)), eventDetail, continuationSupported);
   }
   /**
    * Block until jobId leaves queued/running, the wait bound elapses, or signal aborts —
@@ -1336,7 +1444,7 @@ var BridgeRuntime = class {
     this.assertModelAvailable(record2.harness, record2.model);
     record2.inputRounds += 1;
     record2.warnings.push(`Clarification round ${record2.inputRounds} answered by ${answeredBy}.`);
-    this.lifecycle.resume(record2, answer.trim());
+    this.lifecycle.resume(record2, answer.trim(), "answer");
     return {
       jobId,
       status: record2.status,
@@ -1344,6 +1452,23 @@ var BridgeRuntime = class {
       inputRounds: record2.inputRounds,
       maxInputRounds: LIMITS.maxInputRounds
     };
+  }
+  /** Resume a failed or timed-out worker conversation without requiring an input request. */
+  async resumeTask(jobId, instruction) {
+    const record2 = this.jobs.get(jobId);
+    if (!record2) throw new Error(`Unknown job ID: ${jobId}`);
+    if (record2.status !== "failed" && record2.status !== "timed_out") throw new Error(`Job ${jobId} is not failed or timed out.`);
+    if (instruction !== void 0 && (!instruction.trim() || instruction.length > LIMITS.maxInputAnswerChars)) {
+      throw new Error(`instruction must be a non-empty string no more than ${LIMITS.maxInputAnswerChars} characters.`);
+    }
+    const adapter = this.getAdapter(record2.harness);
+    if (adapter.supportsContinuation !== true || !record2.conversationId) throw new Error(`Harness ${record2.harness} cannot resume this task because no worker conversation is available.`);
+    if (this.activeJobs().length >= this.config.maxConcurrency) throw new Error(`Maximum concurrency (${this.config.maxConcurrency}) reached; retry this resume after an active job finishes.`);
+    this.assertModelAvailable(record2.harness, record2.model);
+    const recoveryInstruction = instruction?.trim() ?? "Continue the original task from the current workspace state.";
+    record2.warnings.push("Task resumed after a terminal failure or timeout.");
+    this.lifecycle.resume(record2, recoveryInstruction, "resume");
+    return { jobId, status: record2.status, conversationId: record2.conversationId };
   }
   async cancelTask(jobId) {
     const record2 = this.jobs.get(jobId);
@@ -34675,17 +34800,18 @@ function createMcpServer(runtime, deps = {}) {
     }
   });
   server.registerTool("delegate_status", {
-    description: "Get a delegated task's status, summary, token usage, changed files, warnings, error category, and recent output events. Pass waitSeconds (up to the bridge's maxStatusWaitSeconds limit) to block this call until the job leaves queued/running instead of returning immediately; call it again with waitSeconds if it is still running. Never try to pause between calls with a shell command \u2014 this call already waits, and Claude Code holds it open without costing extra turns.",
+    description: "Get a delegated task's status, success summary or structured failure, token usage, unattributed workspace changes, warnings, continuation state, and recent output events. Events are compact by default; request full only for debugging. Pass waitSeconds (up to the bridge's maxStatusWaitSeconds limit) to block this call until the job leaves queued/running instead of returning immediately.",
     inputSchema: {
       jobId: external_exports.string().uuid(),
       eventLimit: external_exports.number().int().min(1).max(LIMITS.maxEvents).optional(),
+      eventDetail: external_exports.enum(["compact", "full"]).optional().describe("compact is the default polling view; full returns sanitized raw worker events for debugging."),
       waitSeconds: external_exports.number().int().min(0).max(LIMITS.maxStatusWaitSeconds).optional().describe("Block until the job settles (or this many seconds elapse), instead of returning the current status immediately.")
     },
     annotations: { readOnlyHint: true, openWorldHint: false }
-  }, async ({ jobId, eventLimit, waitSeconds }, ctx) => {
+  }, async ({ jobId, eventLimit, eventDetail, waitSeconds }, ctx) => {
     try {
       if (waitSeconds) await runtime.waitForSettled(jobId, waitSeconds * 1e3, ctx.mcpReq.signal);
-      return jsonResult(runtime.getTask(jobId, eventLimit));
+      return jsonResult(runtime.getTask(jobId, eventLimit, eventDetail));
     } catch (error61) {
       return errorResult(error61);
     }
@@ -34702,19 +34828,27 @@ function createMcpServer(runtime, deps = {}) {
     }
   });
   server.registerTool("delegate_respond", {
-    description: 'Answer a delegated task that is waiting on a clarification (status "awaiting_input" from delegate_status). Use action "answer" when the orchestrator can settle the question itself \u2014 it is covered by the task description or the repository, stays inside the declared scope, and the choice is a reversible implementation detail \u2014 or to relay an answer a human already gave outside this tool; pass answer and optionally answeredBy (defaults to "orchestrator"). Use action "elicit" for product decisions, scope changes, destructive actions, or genuinely ambiguous intent: it asks the connected client to collect the answer directly from a human, and this call must be retried once that answer comes back. Never use either action to collect credentials or secrets; those are always configured out of band, never through this tool.',
+    description: 'Answer a delegated task waiting on a clarification, elicit a human answer, or resume an eligible timed-out or failed worker conversation. Use action "answer" with answer for awaiting_input jobs, action "resume" with an optional recovery instruction when status.continuation.action is "resume", and action "elicit" only for a genuine human decision. Never use this tool to collect credentials or secrets.',
     inputSchema: external_exports.object({
       jobId: external_exports.string().uuid(),
-      action: external_exports.enum(["answer", "elicit"]),
+      action: external_exports.enum(["answer", "elicit", "resume"]),
       answer: external_exports.string().min(1).max(LIMITS.maxInputAnswerChars).optional(),
+      instruction: external_exports.string().min(1).max(LIMITS.maxInputAnswerChars).optional(),
       answeredBy: external_exports.enum(["orchestrator", "human"]).optional()
     }),
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true }
-  }, async ({ jobId, action, answer, answeredBy }, ctx) => {
+  }, async ({ jobId, action, answer, instruction, answeredBy }, ctx) => {
     if (action === "answer") {
       if (!answer) return jsonResult({ error: 'answer is required for action "answer".' }, true);
       try {
         return jsonResult(await runtime.respondTask(jobId, answer, answeredBy ?? "orchestrator"));
+      } catch (error61) {
+        return errorResult(error61);
+      }
+    }
+    if (action === "resume") {
+      try {
+        return jsonResult(await runtime.resumeTask(jobId, instruction));
       } catch (error61) {
         return errorResult(error61);
       }
@@ -34964,7 +35098,15 @@ var AntigravityAdapter = class {
         const outcome = TERMINAL_STATUS[status];
         if (outcome) {
           interpretation.outcome = outcome;
-          interpretation.detail = outcome === "failed" ? `${this.displayName} returned terminal status ${status}.` : void 0;
+          if (outcome === "failed") {
+            const error61 = candidate.error;
+            let message;
+            if (typeof error61 === "string") message = error61;
+            else if (isRecord(error61) && typeof error61.message === "string") message = error61.message;
+            interpretation.detail = message ?? `${this.displayName} returned terminal status ${status}.`;
+            interpretation.failureMessage = interpretation.detail;
+            interpretation.failureSource = "harness";
+          }
         }
       }
     }
@@ -35097,6 +35239,8 @@ var ClaudeCodeAdapter = class {
       if (event.is_error === true) {
         interpretation.outcome = "failed";
         interpretation.detail = `${this.displayName} ended with ${typeof event.subtype === "string" ? event.subtype : "an error"}.`;
+        interpretation.failureMessage = interpretation.detail;
+        interpretation.failureSource = "harness";
       } else {
         interpretation.outcome = "succeeded";
       }
@@ -35662,6 +35806,7 @@ export {
   createMcpServer,
   defaultClassifyFailure,
   defaultRetryAfterMs,
+  describeWorkspaceChanges,
   diffSnapshots,
   dispatchToSinks,
   emptyToolCallStats,
