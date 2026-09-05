@@ -37,6 +37,8 @@ export interface TaskLaunch {
   taskMode: TaskMode;
   /** Continue this harness conversation rather than starting a new one. */
   conversationId?: string;
+  /** Per-job JSON Schema path for harnesses that can constrain their final response. */
+  outputSchemaPath?: string;
 }
 
 export interface SpawnSpec {
@@ -78,6 +80,8 @@ export interface HarnessAdapter {
   readonly defaultModel?: string;
   /** Whether this harness can resume an exited conversation after an input request. */
   readonly supportsContinuation?: boolean;
+  /** Optional final-response schema written to the job's private temporary directory before launch. */
+  readonly outputSchema?: Record<string, unknown>;
   /**
    * Reconcile the requested model and effort before launch: return the model to run,
    * plus a warning when the harness can't honour the requested effort. Harnesses that take effort as a plain flag can omit this.

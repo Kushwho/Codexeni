@@ -173,6 +173,9 @@ export class BridgeRuntime {
     const adapter = this.getAdapter(input.harness ?? this.config.defaultHarness);
     if (!input.task.trim()) throw new Error("Task must not be empty.");
     if (!input.workspace.trim()) throw new Error("Workspace must not be empty.");
+    if (adapter.id === "codex" && !input.model?.trim()) {
+      throw new Error("model is required when harness is \"codex\". Choose an exact model from delegate_discover before starting the task.");
+    }
     if (input.timeoutSeconds !== undefined && (!Number.isSafeInteger(input.timeoutSeconds) || input.timeoutSeconds <= 0 || input.timeoutSeconds > this.config.defaultTimeoutSeconds)) {
       throw new Error(`timeoutSeconds must be a positive integer no greater than ${this.config.defaultTimeoutSeconds}.`);
     }
