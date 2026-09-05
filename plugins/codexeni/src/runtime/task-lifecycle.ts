@@ -24,7 +24,7 @@ export interface TaskLifecycleDependencies {
   random(): number;
   schedule(callback: () => void, delay: number): NodeJS.Timeout;
   cancelSchedule(handle: NodeJS.Timeout): void;
-  classifyAndOpenCircuit(record: TaskRecord): number | undefined;
+  classifyAndOpenCircuit(record: TaskRecord, status: JobStatus): number | undefined;
   clearCircuit(record: TaskRecord): void;
   /** Every registered metrics sink, dispatched to once a job reaches a terminal status. */
   metricsSinks: readonly MetricsSink[];
@@ -174,9 +174,25 @@ export class TaskLifecycle {
   /** Resume a worker conversation after a clarification or terminal recovery request. */
   public resume(record: TaskRecord, instruction: string, kind: "answer" | "resume"): void {
     record.inputRequest = undefined;
+    record.status = "queued";
+    this.resetForRelaunch(record, false);
+    const prompt = kind === "answer" ? buildContinuationPrompt(instruction) : buildRecoveryPrompt(instruction);
+    this.launch(record, prompt);
+  }
+
+  /**
+   * Clear the per-attempt output fields every relaunch (clarification answer or retry)
+   * starts fresh with. `full` also drops the previous attempt's stream, session, usage,
+   * and timing — used by retries, which re-measure the same job from scratch.
+   */
+  private resetForRelaunch(record: TaskRecord, full: boolean): void {
+    record.stderrSummary = "";
+    record.summary = undefined;
     record.outcome = undefined;
     record.outcomeDetail = undefined;
     record.failure = undefined;
+    record.workspaceChanges = undefined;
+    record.partialWorkspaceChanges = undefined;
     record.errorCategory = undefined;
     record.retryable = false;
     record.nextRetryAt = undefined;
@@ -187,13 +203,13 @@ export class TaskLifecycle {
     record.timeoutHandle = undefined;
     record.forcedTerminalStatus = undefined;
     record.cancellationRequested = false;
-    record.stderrSummary = "";
-    record.summary = undefined;
-    record.workspaceChanges = undefined;
-    record.partialWorkspaceChanges = undefined;
-    record.status = "queued";
-    const prompt = kind === "answer" ? buildContinuationPrompt(instruction) : buildRecoveryPrompt(instruction);
-    this.launch(record, prompt);
+    if (full) {
+      record.events = [];
+      record.sessionId = undefined;
+      record.usage = undefined;
+      record.startedAt = undefined;
+      record.finishedAt = undefined;
+    }
   }
 
   /** Finalize a task that is waiting for input without trying to spawn or stop a child. */
@@ -206,7 +222,7 @@ export class TaskLifecycle {
     record.finalizing = true;
     if (record.timeoutHandle) this.dependencies.cancelSchedule(record.timeoutHandle);
     if (detail) record.stderrSummary = redactPotentialSecrets(`${record.stderrSummary}\n${detail}`);
-    const retryAfterMs = status === "failed" || status === "timed_out" ? this.dependencies.classifyAndOpenCircuit(record) : undefined;
+    const retryAfterMs = status === "failed" || status === "timed_out" ? this.dependencies.classifyAndOpenCircuit(record, status) : undefined;
     try {
       if (record.beforeSnapshot) {
         const after = await snapshotWorkspace(record.workspace);
@@ -256,32 +272,30 @@ export class TaskLifecycle {
   private applyInputRequestPolicy(record: TaskRecord): void {
     const request = record.inputRequest;
     if (!request) {
-      record.status = "failed";
-      record.finishedAt = this.dependencies.now().toISOString();
-      record.stderrSummary = redactPotentialSecrets(`${record.stderrSummary}\nWorker requested input without a valid structured question.`);
+      this.failWith(record, "Worker requested input without a valid structured question.");
       return;
     }
     if (!record.conversationId) {
-      record.status = "failed";
-      record.finishedAt = this.dependencies.now().toISOString();
-      record.stderrSummary = redactPotentialSecrets(`${record.stderrSummary}\nWorker requested input without reporting a conversation_id; continuation is unavailable.`);
+      this.failWith(record, "Worker requested input without reporting a conversation_id; continuation is unavailable.");
       return;
     }
     if (record.inputRounds >= LIMITS.maxInputRounds) {
-      record.status = "failed";
-      record.finishedAt = this.dependencies.now().toISOString();
-      record.stderrSummary = redactPotentialSecrets(`${record.stderrSummary}\nWorker exceeded the maximum of ${LIMITS.maxInputRounds} clarification rounds.`);
-      record.warnings.push("Clarification round limit reached; task was stopped to avoid an input loop.");
+      this.failWith(record, `Worker exceeded the maximum of ${LIMITS.maxInputRounds} clarification rounds.`, "Clarification round limit reached; task was stopped to avoid an input loop.");
       return;
     }
     if (record.inputQuestionHistory.includes(request.question)) {
-      record.status = "failed";
-      record.finishedAt = this.dependencies.now().toISOString();
-      record.stderrSummary = redactPotentialSecrets(`${record.stderrSummary}\nWorker repeated the same clarification question after an answer.`);
-      record.warnings.push("Repeated clarification question; task was stopped to avoid an input loop.");
+      this.failWith(record, "Worker repeated the same clarification question after an answer.", "Repeated clarification question; task was stopped to avoid an input loop.");
       return;
     }
     record.inputQuestionHistory.push(request.question);
+  }
+
+  /** Terminal failure with a redacted diagnostic, and optionally a warning for the orchestrator. */
+  private failWith(record: TaskRecord, message: string, warning?: string): void {
+    record.status = "failed";
+    record.finishedAt = this.dependencies.now().toISOString();
+    record.stderrSummary = redactPotentialSecrets(`${record.stderrSummary}\n${message}`);
+    if (warning) record.warnings.push(warning);
   }
 
   private applyFailurePolicy(record: TaskRecord, classifiedRetryAfterMs?: number): void {
@@ -315,28 +329,7 @@ export class TaskLifecycle {
       const snapshot = await snapshotWorkspace(record.workspace);
       record.beforeSnapshot = snapshot.snapshot;
       if (snapshot.truncated) record.warnings.push("Retry pre-task file snapshot reached its entry limit; change detection is partial.");
-      record.stderrSummary = "";
-      record.events = [];
-      record.sessionId = undefined;
-      record.summary = undefined;
-      record.usage = undefined;
-      record.outcome = undefined;
-      record.outcomeDetail = undefined;
-      record.startedAt = undefined;
-      record.finishedAt = undefined;
-      record.pid = undefined;
-      record.exitCode = undefined;
-      record.signal = undefined;
-      record.timeoutHandle = undefined;
-      record.forcedTerminalStatus = undefined;
-      record.cancellationRequested = false;
-      record.failure = undefined;
-      record.workspaceChanges = undefined;
-      record.partialWorkspaceChanges = undefined;
-      record.errorCategory = undefined;
-      record.retryable = false;
-      record.nextRetryAt = undefined;
-      record.blockedUntil = undefined;
+      this.resetForRelaunch(record, true);
       this.launch(record);
     } catch (error) {
       record.status = "failed";

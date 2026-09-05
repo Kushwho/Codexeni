@@ -638,7 +638,7 @@ function hasWorkspaceChanges(changes) {
 }
 function compactText(value) {
   if (typeof value !== "string") return void 0;
-  return value.length > COMPACT_EVENT_TEXT_CHARS ? `${value.slice(0, COMPACT_EVENT_TEXT_CHARS)}\xE2\u20AC\xA6` : value;
+  return value.length > COMPACT_EVENT_TEXT_CHARS ? `${value.slice(0, COMPACT_EVENT_TEXT_CHARS)}\u2026` : value;
 }
 function compactEvent(event) {
   const compact = { timestamp: event.timestamp, type: event.type };
@@ -971,9 +971,24 @@ ${sanitized}`);
   /** Resume a worker conversation after a clarification or terminal recovery request. */
   resume(record2, instruction, kind) {
     record2.inputRequest = void 0;
+    record2.status = "queued";
+    this.resetForRelaunch(record2, false);
+    const prompt = kind === "answer" ? buildContinuationPrompt(instruction) : buildRecoveryPrompt(instruction);
+    this.launch(record2, prompt);
+  }
+  /**
+   * Clear the per-attempt output fields every relaunch (clarification answer or retry)
+   * starts fresh with. `full` also drops the previous attempt's stream, session, usage,
+   * and timing — used by retries, which re-measure the same job from scratch.
+   */
+  resetForRelaunch(record2, full) {
+    record2.stderrSummary = "";
+    record2.summary = void 0;
     record2.outcome = void 0;
     record2.outcomeDetail = void 0;
     record2.failure = void 0;
+    record2.workspaceChanges = void 0;
+    record2.partialWorkspaceChanges = void 0;
     record2.errorCategory = void 0;
     record2.retryable = false;
     record2.nextRetryAt = void 0;
@@ -984,13 +999,13 @@ ${sanitized}`);
     record2.timeoutHandle = void 0;
     record2.forcedTerminalStatus = void 0;
     record2.cancellationRequested = false;
-    record2.stderrSummary = "";
-    record2.summary = void 0;
-    record2.workspaceChanges = void 0;
-    record2.partialWorkspaceChanges = void 0;
-    record2.status = "queued";
-    const prompt = kind === "answer" ? buildContinuationPrompt(instruction) : buildRecoveryPrompt(instruction);
-    this.launch(record2, prompt);
+    if (full) {
+      record2.events = [];
+      record2.sessionId = void 0;
+      record2.usage = void 0;
+      record2.startedAt = void 0;
+      record2.finishedAt = void 0;
+    }
   }
   /** Finalize a task that is waiting for input without trying to spawn or stop a child. */
   async cancelAwaitingInput(record2) {
@@ -1002,7 +1017,7 @@ ${sanitized}`);
     if (record2.timeoutHandle) this.dependencies.cancelSchedule(record2.timeoutHandle);
     if (detail) record2.stderrSummary = redactPotentialSecrets(`${record2.stderrSummary}
 ${detail}`);
-    const retryAfterMs = status === "failed" || status === "timed_out" ? this.dependencies.classifyAndOpenCircuit(record2) : void 0;
+    const retryAfterMs = status === "failed" || status === "timed_out" ? this.dependencies.classifyAndOpenCircuit(record2, status) : void 0;
     try {
       if (record2.beforeSnapshot) {
         const after = await snapshotWorkspace(record2.workspace);
@@ -1049,36 +1064,30 @@ ${detail}`);
   applyInputRequestPolicy(record2) {
     const request = record2.inputRequest;
     if (!request) {
-      record2.status = "failed";
-      record2.finishedAt = this.dependencies.now().toISOString();
-      record2.stderrSummary = redactPotentialSecrets(`${record2.stderrSummary}
-Worker requested input without a valid structured question.`);
+      this.failWith(record2, "Worker requested input without a valid structured question.");
       return;
     }
     if (!record2.conversationId) {
-      record2.status = "failed";
-      record2.finishedAt = this.dependencies.now().toISOString();
-      record2.stderrSummary = redactPotentialSecrets(`${record2.stderrSummary}
-Worker requested input without reporting a conversation_id; continuation is unavailable.`);
+      this.failWith(record2, "Worker requested input without reporting a conversation_id; continuation is unavailable.");
       return;
     }
     if (record2.inputRounds >= LIMITS.maxInputRounds) {
-      record2.status = "failed";
-      record2.finishedAt = this.dependencies.now().toISOString();
-      record2.stderrSummary = redactPotentialSecrets(`${record2.stderrSummary}
-Worker exceeded the maximum of ${LIMITS.maxInputRounds} clarification rounds.`);
-      record2.warnings.push("Clarification round limit reached; task was stopped to avoid an input loop.");
+      this.failWith(record2, `Worker exceeded the maximum of ${LIMITS.maxInputRounds} clarification rounds.`, "Clarification round limit reached; task was stopped to avoid an input loop.");
       return;
     }
     if (record2.inputQuestionHistory.includes(request.question)) {
-      record2.status = "failed";
-      record2.finishedAt = this.dependencies.now().toISOString();
-      record2.stderrSummary = redactPotentialSecrets(`${record2.stderrSummary}
-Worker repeated the same clarification question after an answer.`);
-      record2.warnings.push("Repeated clarification question; task was stopped to avoid an input loop.");
+      this.failWith(record2, "Worker repeated the same clarification question after an answer.", "Repeated clarification question; task was stopped to avoid an input loop.");
       return;
     }
     record2.inputQuestionHistory.push(request.question);
+  }
+  /** Terminal failure with a redacted diagnostic, and optionally a warning for the orchestrator. */
+  failWith(record2, message, warning) {
+    record2.status = "failed";
+    record2.finishedAt = this.dependencies.now().toISOString();
+    record2.stderrSummary = redactPotentialSecrets(`${record2.stderrSummary}
+${message}`);
+    if (warning) record2.warnings.push(warning);
   }
   applyFailurePolicy(record2, classifiedRetryAfterMs) {
     if (record2.status !== "failed" && record2.status !== "timed_out") return;
@@ -1110,28 +1119,7 @@ Worker repeated the same clarification question after an answer.`);
       const snapshot = await snapshotWorkspace(record2.workspace);
       record2.beforeSnapshot = snapshot.snapshot;
       if (snapshot.truncated) record2.warnings.push("Retry pre-task file snapshot reached its entry limit; change detection is partial.");
-      record2.stderrSummary = "";
-      record2.events = [];
-      record2.sessionId = void 0;
-      record2.summary = void 0;
-      record2.usage = void 0;
-      record2.outcome = void 0;
-      record2.outcomeDetail = void 0;
-      record2.startedAt = void 0;
-      record2.finishedAt = void 0;
-      record2.pid = void 0;
-      record2.exitCode = void 0;
-      record2.signal = void 0;
-      record2.timeoutHandle = void 0;
-      record2.forcedTerminalStatus = void 0;
-      record2.cancellationRequested = false;
-      record2.failure = void 0;
-      record2.workspaceChanges = void 0;
-      record2.partialWorkspaceChanges = void 0;
-      record2.errorCategory = void 0;
-      record2.retryable = false;
-      record2.nextRetryAt = void 0;
-      record2.blockedUntil = void 0;
+      this.resetForRelaunch(record2, true);
       this.launch(record2);
     } catch (error61) {
       record2.status = "failed";
@@ -1247,7 +1235,7 @@ var BridgeRuntime = class {
       random: this.random,
       schedule: this.scheduleTimeout,
       cancelSchedule: this.cancelTimeout,
-      classifyAndOpenCircuit: (record2) => this.classifyAndOpenCircuit(record2),
+      classifyAndOpenCircuit: (record2, status) => this.classifyAndOpenCircuit(record2, status),
       clearCircuit: (record2) => this.breakers.delete(this.breakerKey(record2.harness, record2.model)),
       metricsSinks: this.sinks,
       priceTable: this.priceTable
@@ -1526,7 +1514,18 @@ var BridgeRuntime = class {
       return { installed: false, authStatus: "unavailable", models: [], modelSource: "unknown", error: redactPotentialSecrets(error61 instanceof Error ? error61.message : String(error61)) };
     }
   }
-  classifyAndOpenCircuit(record2) {
+  /**
+   * A bridge timeout is not provider evidence: the worker was killed at the deadline, so any
+   * rate-limit or quota text in its history is mid-run retry noise, and honoring a retry-after
+   * parsed from it would block the model tier for a condition that may have already passed.
+   * Timeouts classify as upstream_error — which keeps no-change read-only retries working
+   * through the backoff path — and never open a circuit.
+   */
+  classifyAndOpenCircuit(record2, status) {
+    if (status === "timed_out") {
+      record2.errorCategory = "upstream_error";
+      return void 0;
+    }
     const adapter = this.getAdapter(record2.harness);
     const context = [record2.stderrSummary, record2.summary, record2.outcomeDetail, ...record2.events.map((event) => event.data)];
     record2.errorCategory = (adapter.classifyFailure ? adapter.classifyFailure(context) : defaultClassifyFailure(context)) ?? "upstream_error";

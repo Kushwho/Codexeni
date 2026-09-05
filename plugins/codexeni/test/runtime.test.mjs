@@ -653,6 +653,54 @@ test("a read-only retry starts with a clean lifecycle after timeout", async () =
   assert.equal(calls.length, 2);
 });
 
+test("a bridge timeout never opens a provider circuit even when the history mentions rate limits", async () => {
+  const { root } = await makeWorkspace();
+  const timers = createManualTimers();
+  const { spawnImpl, calls } = createFakeSpawn([
+    { stderr: "HTTP 429 rate limit; retry-after: 900\n", close: false },
+    { stdout: '{"event":"result","result":{"status":"SUCCESS","response":"recovered"}}\n', exitCode: 0 },
+  ]);
+  const runtime = makeRuntime(bridge, root, {}, {
+    spawnImpl, randomImpl: () => 0,
+    setTimeoutImpl: timers.setTimeoutImpl, clearTimeoutImpl: timers.clearTimeoutImpl,
+  });
+  const started = await runtime.startTask({ task: "read-only timeout with 429 noise", workspace: root, taskMode: "read_only", maxRetries: 1, timeoutSeconds: 1 });
+  timers.runNext((timer) => timer.delay === 1_000);
+  await waitFor(() => {
+    const job = runtime.getTask(started.jobId);
+    assert.equal(job.status, "queued");
+    assert.equal(job.errorCategory, "upstream_error", "a bridge deadline is not provider evidence");
+    assert.equal(job.retryCount, 1);
+  });
+  assert.equal(runtime.breakers.size, 0, "a bridge timeout must not open a model circuit");
+  const retryTimer = timers.pending().find((timer) => timer.delay < 900_000);
+  assert.ok(retryTimer, "a retry timer should be scheduled separately from the task timeout");
+  assert.equal(retryTimer.delay, 15_000, "the retry uses the fallback backoff, never the stale retry-after from the killed attempt");
+  timers.runNext((timer) => timer === retryTimer);
+  await waitFor(() => assert.equal(runtime.getTask(started.jobId).status, "succeeded"));
+  assert.equal(calls.length, 2);
+  await runtime.shutdown();
+});
+
+test("a coding task killed by the bridge timeout leaves no circuit breaker behind", async () => {
+  const { root } = await makeWorkspace();
+  const timers = createManualTimers();
+  const { spawnImpl } = createFakeSpawn([{ stderr: "HTTP 429 rate limit\n", close: false }]);
+  const runtime = makeRuntime(bridge, root, {}, {
+    spawnImpl, randomImpl: () => 0,
+    setTimeoutImpl: timers.setTimeoutImpl, clearTimeoutImpl: timers.clearTimeoutImpl,
+  });
+  const started = await runtime.startTask({ task: "coding timeout with 429 noise", workspace: root, taskMode: "coding", timeoutSeconds: 1 });
+  timers.runNext((timer) => timer.delay === 1_000);
+  await waitFor(() => {
+    const job = runtime.getTask(started.jobId);
+    assert.equal(job.status, "timed_out");
+    assert.equal(job.errorCategory, "upstream_error");
+  });
+  assert.equal(runtime.breakers.size, 0, "a bridge timeout must not block the model tier");
+  await runtime.shutdown();
+});
+
 test("task mode and read-only retry limits are validated and coding always has zero retries", async () => {
   const { root } = await makeWorkspace();
   const { spawnImpl } = createFakeSpawn([{ close: false }]);

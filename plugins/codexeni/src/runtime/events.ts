@@ -46,7 +46,7 @@ export function hasWorkspaceChanges(changes: WorkspaceChanges | undefined): bool
 
 function compactText(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
-  return value.length > COMPACT_EVENT_TEXT_CHARS ? `${value.slice(0, COMPACT_EVENT_TEXT_CHARS)}â€¦` : value;
+  return value.length > COMPACT_EVENT_TEXT_CHARS ? `${value.slice(0, COMPACT_EVENT_TEXT_CHARS)}…` : value;
 }
 
 function compactEvent(event: StreamEvent): Record<string, unknown> {
