@@ -9,7 +9,7 @@ import { defaultClassifyFailure, defaultRetryAfterMs } from "../core/failure.js"
 import { LIMITS } from "../core/limits.js";
 import type { UsageRollup } from "../core/metrics.js";
 import type { PriceTable } from "../core/pricing.js";
-import type { AllowedRootSource, BridgeConfig, CircuitBreaker, Effort, InputRequest, RuntimeDependencies, SpawnFunction, StopChildFunction, TaskMode, TaskRecord } from "../core/types.js";
+import type { AllowedRootSource, BridgeConfig, CircuitBreaker, Effort, InputRequest, JobStatus, RuntimeDependencies, SpawnFunction, StopChildFunction, TaskMode, TaskRecord } from "../core/types.js";
 import { DEFAULT_HARNESS, resolveBridgeConfig, resolveMetricsFilePath, resolvePriceTable } from "../platform/config.js";
 import { captureCommand, stopChildProcess } from "../platform/process.js";
 import { WorkspaceGuard, canonicalizeWorkspace, snapshotWorkspace } from "../platform/workspace.js";
@@ -100,7 +100,7 @@ export class BridgeRuntime {
       random: this.random,
       schedule: this.scheduleTimeout,
       cancelSchedule: this.cancelTimeout,
-      classifyAndOpenCircuit: (record) => this.classifyAndOpenCircuit(record),
+      classifyAndOpenCircuit: (record, status) => this.classifyAndOpenCircuit(record, status),
       clearCircuit: (record) => this.breakers.delete(this.breakerKey(record.harness, record.model)),
       metricsSinks: this.sinks,
       priceTable: this.priceTable,
@@ -396,7 +396,18 @@ export class BridgeRuntime {
     catch (error) { return { installed: false, authStatus: "unavailable", models: [], modelSource: "unknown", error: redactPotentialSecrets(error instanceof Error ? error.message : String(error)) }; }
   }
 
-  private classifyAndOpenCircuit(record: TaskRecord): number | undefined {
+  /**
+   * A bridge timeout is not provider evidence: the worker was killed at the deadline, so any
+   * rate-limit or quota text in its history is mid-run retry noise, and honoring a retry-after
+   * parsed from it would block the model tier for a condition that may have already passed.
+   * Timeouts classify as upstream_error — which keeps no-change read-only retries working
+   * through the backoff path — and never open a circuit.
+   */
+  private classifyAndOpenCircuit(record: TaskRecord, status: JobStatus): number | undefined {
+    if (status === "timed_out") {
+      record.errorCategory = "upstream_error";
+      return undefined;
+    }
     const adapter = this.getAdapter(record.harness);
     const context = [record.stderrSummary, record.summary, record.outcomeDetail, ...record.events.map((event) => event.data)];
     record.errorCategory = (adapter.classifyFailure ? adapter.classifyFailure(context) : defaultClassifyFailure(context)) ?? "upstream_error";
