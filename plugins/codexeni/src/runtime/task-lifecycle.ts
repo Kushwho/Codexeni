@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { appendFile } from "node:fs/promises";
 
-import type { HarnessAdapter } from "../adapters/adapter.js";
+import type { HarnessAdapter, Interpretation } from "../adapters/adapter.js";
 import { LIMITS } from "../core/limits.js";
 import type { PriceTable } from "../core/pricing.js";
 import { priceKey, withEstimatedCost } from "../core/pricing.js";
@@ -10,7 +10,7 @@ import { redactPotentialSecrets } from "../core/redaction.js";
 import type { InputRequest, JobStatus, SpawnFunction, StopChildFunction, TaskRecord } from "../core/types.js";
 import { describeWorkspaceChanges, diffSnapshots, snapshotWorkspace } from "../platform/workspace.js";
 import { isRecord, parseJsonLine, sanitizeEventData } from "./events.js";
-import { collectorFor } from "./metrics-collector.js";
+import { collectorFor, TaskMetricsCollector } from "./metrics-collector.js";
 import { dispatchToSinks, type MetricsSink } from "./observability.js";
 import { mayRetry, retryBackoffMs } from "./retry-policy.js";
 
@@ -68,6 +68,15 @@ export class TaskLifecycle {
       child.stdin.on("error", () => { /* the child may exit before reading its prompt */ });
       child.stdin.end(spec.stdin);
     }
+    // Whole-stdout buffer for adapters whose harness prints one document instead of JSON
+    // lines. A real child flushes stdout before close, but the close event must not race
+    // the interpretation, so whichever arrives first applies it exactly once.
+    const document = { text: "", interpreted: false };
+    const interpretDocumentOnce = (): void => {
+      if (document.interpreted) return;
+      document.interpreted = true;
+      if (document.text.trim()) this.interpretDocument(record, document.text);
+    };
     record.child = child;
     record.pid = child.pid;
     record.status = "running";
@@ -83,6 +92,7 @@ export class TaskLifecycle {
     }, record.timeoutSeconds * 1_000);
     child.once("error", (error) => void this.finalize(record, "failed", error.message));
     child.once("close", (code, signal) => {
+      interpretDocumentOnce();
       record.exitCode = code;
       record.signal = signal;
       const status = this.exitStatus(record, code);
@@ -92,7 +102,7 @@ export class TaskLifecycle {
         : undefined;
       void this.finalize(record, status, detail);
     });
-    this.captureStream(child.stdout, record, false);
+    this.captureStream(child.stdout, record, false, document, interpretDocumentOnce);
     this.captureStream(child.stderr, record, true);
   }
 
@@ -104,7 +114,13 @@ export class TaskLifecycle {
     return record.outcome ?? "failed";
   }
 
-  private captureStream(stream: NodeJS.ReadableStream | null, record: TaskRecord, stderr: boolean): void {
+  private captureStream(
+    stream: NodeJS.ReadableStream | null,
+    record: TaskRecord,
+    stderr: boolean,
+    document?: { text: string; interpreted: boolean },
+    onEnd?: () => void,
+  ): void {
     if (!stream) return;
     let pending = "";
     stream.setEncoding("utf8");
@@ -116,12 +132,29 @@ export class TaskLifecycle {
         record.stderrSummary = redactPotentialSecrets(`${record.stderrSummary}\n${sanitized}`);
         return;
       }
+      if (document && document.text.length < LIMITS.maxStdoutChars) document.text += received;
       pending += received;
       const lines = pending.split(/\r?\n/);
       pending = lines.pop() ?? "";
       for (const line of lines) this.recordEvent(record, line);
     });
-    stream.on("end", () => { if (!stderr && pending) this.recordEvent(record, pending); });
+    stream.on("end", () => {
+      if (stderr) return;
+      if (pending) this.recordEvent(record, pending);
+      onEnd?.();
+    });
+  }
+
+  /**
+   * Hand document-style stdout — one JSON envelope that is never valid per line — to an
+   * adapter that knows how to read it, once the stream has fully arrived. Runs before the
+   * child close is finalized, so the interpretation still decides the exit status.
+   */
+  private interpretDocument(record: TaskRecord, document: string): void {
+    if (!document.trim()) return;
+    const adapter = this.dependencies.getAdapter(record.harness);
+    const fields = adapter.interpretBuffer?.(document);
+    if (fields) this.applyInterpretation(record, fields, collectorFor(record));
   }
 
   private recordEvent(record: TaskRecord, line: string): void {
@@ -134,7 +167,11 @@ export class TaskLifecycle {
     const collector = collectorFor(record);
     collector.recordEvent();
     if (event.type === "unparsed_output" || !isRecord(event.data)) return;
-    const fields = this.dependencies.getAdapter(record.harness).interpret(event.data);
+    this.applyInterpretation(record, this.dependencies.getAdapter(record.harness).interpret(event.data), collector);
+  }
+
+  /** Merge one adapter interpretation into the record; later fields overwrite earlier ones except tool calls, which append. */
+  private applyInterpretation(record: TaskRecord, fields: Interpretation, collector: TaskMetricsCollector): void {
     if (typeof fields.sessionId === "string") {
       record.sessionId = fields.sessionId;
       record.conversationId = fields.sessionId;

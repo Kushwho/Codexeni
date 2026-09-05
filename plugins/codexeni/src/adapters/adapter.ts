@@ -86,6 +86,13 @@ export interface HarnessAdapter {
   probe(run: CommandRunner): Promise<HarnessProbe>;
   command(input: TaskLaunch): SpawnSpec;
   interpret(event: Record<string, unknown>): Interpretation;
+  /**
+   * Interpret the child's whole stdout when the harness prints one document — e.g. a
+   * single JSON envelope — instead of line-delimited JSON, because such output never
+   * parses per line. Called at most once per run, when the stdout stream ends (or at
+   * close, whichever arrives first) and before the exit status is decided; must never throw.
+   */
+  interpretBuffer?(stdout: string): Interpretation;
   classifyFailure?(context: unknown): ErrorCategory | undefined;
   retryAfterMs?(context: unknown, nowMs: number): number | undefined;
 }

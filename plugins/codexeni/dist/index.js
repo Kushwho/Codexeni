@@ -24,6 +24,8 @@ var LIMITS = {
   maxInputOptions: 10,
   /** Longest string kept from any single child-output value. */
   maxEventChars: 8e3,
+  /** Whole-stdout buffer kept for adapters that interpret one document rather than JSON lines. */
+  maxStdoutChars: 1e6,
   /** Files inspected when snapshotting a workspace for change detection. */
   snapshotMaxEntries: 2e4,
   /** Time allowed for a harness probe command such as `--version`. */
@@ -190,7 +192,9 @@ function normalizeUsage(raw) {
   const cacheWriteTokens = asNumber(
     record2.cache_creation_input_tokens ?? record2.cache_write_tokens ?? record2.cacheWriteTokens
   );
-  const thinkingTokens = asNumber(record2.thinking_tokens ?? record2.thoughts_token_count ?? record2.thinkingTokens);
+  const thinkingTokens = asNumber(
+    record2.thinking_tokens ?? record2.thoughts_token_count ?? record2.thinkingTokens ?? record2.reasoning_tokens ?? record2.reasoningTokens
+  );
   const totalTokens = asNumber(record2.total_tokens ?? record2.totalTokens);
   const costUsd = asNumber(record2.total_cost_usd ?? record2.cost_usd ?? record2.costUsd);
   if (inputTokens !== void 0) usage.inputTokens = inputTokens;
@@ -869,6 +873,12 @@ var TaskLifecycle = class {
       });
       child.stdin.end(spec.stdin);
     }
+    const document = { text: "", interpreted: false };
+    const interpretDocumentOnce = () => {
+      if (document.interpreted) return;
+      document.interpreted = true;
+      if (document.text.trim()) this.interpretDocument(record2, document.text);
+    };
     record2.child = child;
     record2.pid = child.pid;
     record2.status = "running";
@@ -884,6 +894,7 @@ var TaskLifecycle = class {
     }, record2.timeoutSeconds * 1e3);
     child.once("error", (error61) => void this.finalize(record2, "failed", error61.message));
     child.once("close", (code, signal) => {
+      interpretDocumentOnce();
       record2.exitCode = code;
       record2.signal = signal;
       const status = this.exitStatus(record2, code);
@@ -891,7 +902,7 @@ var TaskLifecycle = class {
       const detail = code === 0 && !record2.forcedTerminalStatus && !record2.cancellationRequested && !harnessReportedEnd ? record2.outcomeDetail ?? `${adapter.displayName} exited without a terminal result event.` : void 0;
       void this.finalize(record2, status, detail);
     });
-    this.captureStream(child.stdout, record2, false);
+    this.captureStream(child.stdout, record2, false, document, interpretDocumentOnce);
     this.captureStream(child.stderr, record2, true);
   }
   exitStatus(record2, code) {
@@ -901,7 +912,7 @@ var TaskLifecycle = class {
     if (record2.inputRequest) return "awaiting_input";
     return record2.outcome ?? "failed";
   }
-  captureStream(stream, record2, stderr) {
+  captureStream(stream, record2, stderr, document, onEnd) {
     if (!stream) return;
     let pending = "";
     stream.setEncoding("utf8");
@@ -914,14 +925,28 @@ var TaskLifecycle = class {
 ${sanitized}`);
         return;
       }
+      if (document && document.text.length < LIMITS.maxStdoutChars) document.text += received;
       pending += received;
       const lines = pending.split(/\r?\n/);
       pending = lines.pop() ?? "";
       for (const line of lines) this.recordEvent(record2, line);
     });
     stream.on("end", () => {
-      if (!stderr && pending) this.recordEvent(record2, pending);
+      if (stderr) return;
+      if (pending) this.recordEvent(record2, pending);
+      onEnd?.();
     });
+  }
+  /**
+   * Hand document-style stdout — one JSON envelope that is never valid per line — to an
+   * adapter that knows how to read it, once the stream has fully arrived. Runs before the
+   * child close is finalized, so the interpretation still decides the exit status.
+   */
+  interpretDocument(record2, document) {
+    if (!document.trim()) return;
+    const adapter = this.dependencies.getAdapter(record2.harness);
+    const fields = adapter.interpretBuffer?.(document);
+    if (fields) this.applyInterpretation(record2, fields, collectorFor(record2));
   }
   recordEvent(record2, line) {
     const event = parseJsonLine(line, this.dependencies.now().toISOString());
@@ -934,7 +959,10 @@ ${sanitized}`);
     const collector = collectorFor(record2);
     collector.recordEvent();
     if (event.type === "unparsed_output" || !isRecord(event.data)) return;
-    const fields = this.dependencies.getAdapter(record2.harness).interpret(event.data);
+    this.applyInterpretation(record2, this.dependencies.getAdapter(record2.harness).interpret(event.data), collector);
+  }
+  /** Merge one adapter interpretation into the record; later fields overwrite earlier ones except tool calls, which append. */
+  applyInterpretation(record2, fields, collector) {
     if (typeof fields.sessionId === "string") {
       record2.sessionId = fields.sessionId;
       record2.conversationId = fields.sessionId;
@@ -35259,11 +35287,126 @@ var ClaudeCodeAdapter = class {
   }
 };
 
+// src/adapters/zcode.ts
+import { existsSync } from "node:fs";
+import { join as join3 } from "node:path";
+var ZCODE_DEFAULTS = {
+  executable: "zcode",
+  model: "glm-5.3-flash"
+};
+var ZCODE_MODELS = ["glm-5.3-flash", "glm-5.3", "glm-5.2", "glm-5.1", "glm-5-turbo"];
+var MUTATING_TOOLS = "Edit,Write,SendMessage";
+var ZCODE_ERROR_CATEGORY = [
+  { pattern: /insufficient balance|no resource package/i, category: "quota_exhausted" },
+  { pattern: /unauthorized|invalid api key/i, category: "authentication" },
+  { pattern: /captcha verify failed/i, category: "upstream_error" }
+];
+var ZcodeAdapter = class {
+  id = "zcode";
+  displayName = "ZCode";
+  /** The command the bridge spawns; `node` when ZCode is reached through its JS entry. */
+  executable;
+  defaultModel;
+  supportsContinuation = true;
+  /** Prepended to every invocation; non-empty only when ZCode runs through its JS entry. */
+  entryArgs;
+  constructor(settings = {}) {
+    const configured = settings.executable?.trim();
+    if (configured && /\.(m|c)?js$/i.test(configured)) {
+      this.executable = process.execPath;
+      this.entryArgs = [configured];
+    } else if (configured) {
+      this.executable = configured;
+      this.entryArgs = [];
+    } else if (process.platform === "win32") {
+      const npmEntry = process.env.APPDATA ? join3(process.env.APPDATA, "npm", "node_modules", "zcode-app-cli", "bin", "zcode.js") : void 0;
+      if (npmEntry && existsSync(npmEntry)) {
+        this.executable = process.execPath;
+        this.entryArgs = [npmEntry];
+      } else {
+        this.executable = ZCODE_DEFAULTS.executable;
+        this.entryArgs = [];
+      }
+    } else {
+      this.executable = ZCODE_DEFAULTS.executable;
+      this.entryArgs = [];
+    }
+    this.defaultModel = settings.defaultModel ?? ZCODE_DEFAULTS.model;
+  }
+  async probe(run) {
+    const version2 = await run([...this.entryArgs, "--version"]);
+    return {
+      installed: version2.ok,
+      version: version2.ok ? version2.stdout.trim() : void 0,
+      authStatus: version2.ok ? "unknown" : "unavailable",
+      models: version2.ok ? [...ZCODE_MODELS] : [],
+      modelSource: "static",
+      error: version2.ok ? void 0 : version2.error
+    };
+  }
+  /**
+   * The model actually used is whatever ZCode's own config.json selects (model.main);
+   * its CLI takes no model flag, so a caller-requested model can only be reported, not applied.
+   */
+  resolveSelection(model) {
+    if (!model) return {};
+    return { model, warning: `ZCode runs the model configured in its own config (model.main); the requested model "${model}" was not applied.` };
+  }
+  command(input2) {
+    const args = [...this.entryArgs, "--json", "--mode"];
+    if (input2.taskMode === "read_only") {
+      args.push("plan", "--disallowed-tools", MUTATING_TOOLS);
+    } else {
+      args.push(input2.permissionMode === "full" ? "yolo" : "edit");
+    }
+    if (input2.conversationId) args.push("--resume", input2.conversationId);
+    args.push("--prompt", input2.prompt);
+    return { command: this.executable, args, cwd: input2.workspace };
+  }
+  interpret(_event) {
+    return {};
+  }
+  interpretBuffer(stdout) {
+    const interpretation = {};
+    const trimmed = stdout.trim();
+    if (!trimmed) return interpretation;
+    let parsed;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      return interpretation;
+    }
+    if (!isRecord(parsed)) return interpretation;
+    if (typeof parsed.sessionId === "string") interpretation.sessionId = parsed.sessionId;
+    if (typeof parsed.response === "string" && parsed.response.trim()) {
+      interpretation.summary = redactPotentialSecrets(parsed.response);
+      interpretation.outcome = "succeeded";
+    }
+    const normalized = normalizeUsage(parsed.usage);
+    if (normalized) interpretation.usage = normalized;
+    const projection = isRecord(parsed.projection) ? parsed.projection : void 0;
+    if (projection && typeof projection.turnCount === "number" && Number.isFinite(projection.turnCount)) {
+      interpretation.turns = projection.turnCount;
+    }
+    return interpretation;
+  }
+  classifyFailure(context) {
+    for (const item of Array.isArray(context) ? context : [context]) {
+      if (typeof item !== "string") continue;
+      for (const { pattern, category } of ZCODE_ERROR_CATEGORY) {
+        if (pattern.test(item)) return category;
+      }
+    }
+    return defaultClassifyFailure(context);
+  }
+};
+
 // src/adapters/index.ts
 function createBuiltInAdapters(config2) {
   return [
     new AntigravityAdapter(config2.harnesses.antigravity ?? {}),
-    new ClaudeCodeAdapter(config2.harnesses["claude-code"] ?? {})
+    new ClaudeCodeAdapter(config2.harnesses["claude-code"] ?? {}),
+    new ZcodeAdapter(config2.harnesses["zcode"] ?? {})
   ];
 }
 
@@ -35796,6 +35939,9 @@ export {
   TaskLifecycle,
   TaskMetricsCollector,
   WorkspaceGuard,
+  ZCODE_DEFAULTS,
+  ZCODE_MODELS,
+  ZcodeAdapter,
   buildDelegationPrompt,
   canonicalizeWorkspace,
   captureCommand,

@@ -1,6 +1,6 @@
 # Codexeni
 
-Codexeni lets one coding harness delegate bounded tasks to another local coding harness through MCP; Antigravity and Claude Code are the built-in workers, more adapters are planned. The calling harness remains the orchestrator: it scopes the task, reviews changes, and runs final verification.
+Codexeni lets one coding harness delegate bounded tasks to another local coding harness through MCP; Antigravity, Claude Code, and ZCode are the built-in workers, more adapters are planned. The calling harness remains the orchestrator: it scopes the task, reviews changes, and runs final verification.
 
 > Unofficial project. Not affiliated with Google, Antigravity, Gemini, Anthropic, Claude, or OpenAI.
 
@@ -13,6 +13,7 @@ A harness can play either or both of two roles: **host**, meaning it runs Codexe
 | Codex | yes | not yet (planned) |
 | Claude Code | yes | yes |
 | Antigravity | not yet — works today via `agy mcp add codexeni node <abs path to>/dist/index.js` | yes |
+| ZCode | not yet | yes |
 
 ## Install
 
@@ -22,6 +23,7 @@ Worker requirement, depending on which worker you plan to delegate to:
 
 - Antigravity worker: `agy` installed and authenticated; `gemini-3.7-flash-high` listed by `agy models`.
 - Claude Code worker: `claude` installed and logged in (`claude auth status`).
+- ZCode worker: `zcode` installed with model access configured in its own config (`~/.zcode/cli/config.json`). Verify with `zcode --json --prompt "Reply with exactly: OK"`; on Windows the adapter reaches the CLI through its npm-global `bin/zcode.js` entry automatically.
 
 Pick the host you want to run Codexeni's tools from.
 
@@ -86,8 +88,8 @@ If a worker asks a question, `delegate_status` reports `status: "awaiting_input"
 ## Defaults
 
 - Default harness: `antigravity`
-- Default model: `gemini-3.7-flash-high` for the Antigravity worker, `sonnet` for the Claude Code worker
-- Permission mode: `full` by default (`--dangerously-skip-permissions`, since there is no human available to answer a prompt in a headless session). Set `BRIDGE_PERMISSION_MODE=restricted` explicitly to require per-call approval instead.
+- Default model: `gemini-3.7-flash-high` for the Antigravity worker, `sonnet` for the Claude Code worker, `glm-5.3-flash` for the ZCode worker. ZCode's CLI takes no model flag: it runs whichever model its own `config.json` selects via `model.main`, so a caller-requested model is reported as a warning rather than applied.
+- Permission mode: `full` by default (`--dangerously-skip-permissions`, since there is no human available to answer a prompt in a headless session). Set `BRIDGE_PERMISSION_MODE=restricted` explicitly to require per-call approval instead. ZCode maps full to `--mode yolo`, restricted to `--mode edit`, and read-only tasks to `--mode plan` with `Edit`, `Write`, and `SendMessage` denied.
 - Maximum concurrent jobs: `4`
 - Coding retries: `0`
 - Read-only retries: at most `2`
@@ -110,6 +112,8 @@ Most users do not need these variables:
 - `BRIDGE_ANTIGRAVITY_MODEL` — exact default model slug for the Antigravity adapter
 - `BRIDGE_CLAUDE_CODE_PATH` — absolute path to `claude` when it is not on `PATH`
 - `BRIDGE_CLAUDE_CODE_MODEL` — exact default model slug for the Claude Code adapter (default `sonnet`)
+- `BRIDGE_ZCODE_PATH` — absolute path to the `zcode` CLI, or to its `bin/zcode.js` entry (run through Node automatically), when the default resolution is wrong
+- `BRIDGE_ZCODE_MODEL` — default model slug recorded for the ZCode adapter (default `glm-5.3-flash`; informational, see Defaults)
 - `BRIDGE_METRICS_FILE` — append one JSON line of usage metrics per finished job to this path
 - `BRIDGE_PRICING_FILE` — JSON price table merged over the built-in rates, so a rate change needs no release
 
