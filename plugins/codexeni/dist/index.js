@@ -190,7 +190,9 @@ function normalizeUsage(raw) {
   const cacheWriteTokens = asNumber(
     record2.cache_creation_input_tokens ?? record2.cache_write_tokens ?? record2.cacheWriteTokens
   );
-  const thinkingTokens = asNumber(record2.thinking_tokens ?? record2.thoughts_token_count ?? record2.thinkingTokens);
+  const thinkingTokens = asNumber(
+    record2.thinking_tokens ?? record2.thoughts_token_count ?? record2.thinkingTokens ?? record2.reasoning_tokens ?? record2.reasoningTokens ?? record2.reasoning_output_tokens
+  );
   const totalTokens = asNumber(record2.total_tokens ?? record2.totalTokens);
   const costUsd = asNumber(record2.total_cost_usd ?? record2.cost_usd ?? record2.costUsd);
   if (inputTokens !== void 0) usage.inputTokens = inputTokens;
@@ -832,7 +834,9 @@ function retryBackoffMs(retryCount, random) {
 }
 
 // src/runtime/task-lifecycle.ts
+import { writeFileSync } from "node:fs";
 import { appendFile as appendFile2 } from "node:fs/promises";
+import { dirname, join as join2 } from "node:path";
 var TERMINAL_STATUSES = ["succeeded", "failed", "timed_out", "canceled"];
 var TaskLifecycle = class {
   constructor(dependencies) {
@@ -840,6 +844,17 @@ var TaskLifecycle = class {
   }
   launch(record2, continuationPrompt) {
     const adapter = this.dependencies.getAdapter(record2.harness);
+    let outputSchemaPath;
+    try {
+      if (adapter.outputSchema) {
+        outputSchemaPath = join2(dirname(record2.logPath), "worker-result.schema.json");
+        writeFileSync(outputSchemaPath, `${JSON.stringify(adapter.outputSchema)}
+`, "utf8");
+      }
+    } catch (error61) {
+      void this.finalize(record2, "failed", `Could not prepare ${adapter.displayName} output schema: ${error61 instanceof Error ? error61.message : String(error61)}`);
+      return;
+    }
     const spec = adapter.command({
       prompt: continuationPrompt === void 0 ? buildDelegationPrompt(record2.task, record2.workspace, record2.taskMode) : continuationPrompt,
       workspace: record2.workspace,
@@ -848,7 +863,8 @@ var TaskLifecycle = class {
       effort: record2.effort,
       permissionMode: record2.permissionMode,
       taskMode: record2.taskMode,
-      conversationId: continuationPrompt === void 0 ? void 0 : record2.conversationId
+      conversationId: continuationPrompt === void 0 ? void 0 : record2.conversationId,
+      outputSchemaPath
     });
     let child;
     try {
@@ -1182,7 +1198,7 @@ import { spawn as nodeSpawn2 } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join as join2 } from "node:path";
+import { join as join3 } from "node:path";
 var BridgeRuntime = class {
   config;
   jobs = /* @__PURE__ */ new Map();
@@ -1305,6 +1321,9 @@ var BridgeRuntime = class {
     const adapter = this.getAdapter(input2.harness ?? this.config.defaultHarness);
     if (!input2.task.trim()) throw new Error("Task must not be empty.");
     if (!input2.workspace.trim()) throw new Error("Workspace must not be empty.");
+    if (adapter.requiresExplicitModel && !input2.model?.trim()) {
+      throw new Error(`model is required when harness is "${adapter.id}". Choose an exact model from delegate_discover before starting the task.`);
+    }
     if (input2.timeoutSeconds !== void 0 && (!Number.isSafeInteger(input2.timeoutSeconds) || input2.timeoutSeconds <= 0 || input2.timeoutSeconds > this.config.defaultTimeoutSeconds)) {
       throw new Error(`timeoutSeconds must be a positive integer no greater than ${this.config.defaultTimeoutSeconds}.`);
     }
@@ -1324,7 +1343,7 @@ var BridgeRuntime = class {
     for (const job of overlappingJobs) {
       if (!job.overlappingJobIds.includes(id)) job.overlappingJobIds.push(id);
     }
-    const folder = await this.mkdtempImpl(join2(tmpdir(), "codexeni-"));
+    const folder = await this.mkdtempImpl(join3(tmpdir(), "codexeni-"));
     this.tempDirs.add(folder);
     const record2 = {
       id,
@@ -1345,7 +1364,7 @@ var BridgeRuntime = class {
       status: "queued",
       createdAt: this.now().toISOString(),
       stderrSummary: "",
-      logPath: join2(folder, `${id}.ndjson`),
+      logPath: join3(folder, `${id}.ndjson`),
       events: [],
       warnings: [
         ...selection.warning ? [selection.warning] : [],
@@ -34183,11 +34202,11 @@ var McpServer = class {
   * @param errorMessage - The error message.
   * @returns The tool error result.
   */
-  createToolError(errorMessage) {
+  createToolError(errorMessage2) {
     return {
       content: [{
         type: "text",
-        text: errorMessage
+        text: errorMessage2
       }],
       isError: true
     };
@@ -34774,21 +34793,21 @@ function createMcpServer(runtime, deps = {}) {
     task: external_exports.string().min(1).max(1e5).describe("The bounded task for the worker: objective, allowed paths, required checks, and stop condition."),
     workspace: external_exports.string().min(1).describe("Absolute path of the orchestrator's current workspace; in zero-config mode this exact canonical directory is the task boundary."),
     harness: external_exports.string().min(1).max(100).optional().describe('Harness id from delegate_discover (for example "antigravity" or "claude-code"). Defaults to the configured default harness.'),
-    model: external_exports.string().min(1).max(200).optional().describe("Exact model slug as listed by delegate_discover. Defaults to the harness's default model."),
+    model: external_exports.string().min(1).max(200).optional().describe('Exact model slug from delegate_discover. Required when harness is "codex" so the orchestrator records the chosen Codex model before launch; optional for other harnesses.'),
     effort: external_exports.enum(["low", "medium", "high"]).optional(),
     taskMode: external_exports.enum(["coding", "read_only"]).optional().describe("read_only forbids workspace changes and allows bounded automatic retries; coding never retries."),
     maxRetries: external_exports.number().int().min(0).max(LIMITS.readOnlyMaxRetries).optional(),
     timeoutSeconds: external_exports.number().int().positive().max(runtime.config.defaultTimeoutSeconds).optional()
   };
   server.registerTool("delegate_discover", {
-    description: "List the local coding harnesses this bridge can delegate to, with install state, login state, and available models, plus the bridge's own limits. Reuses recent checks unless refresh is true. Reads no credentials.",
+    description: `List the local coding harnesses this bridge can delegate to, with install state, login state, and available models, plus the bridge's own limits. Codex reports a maintained static compatible model list because its CLI cannot enumerate account entitlements; select one of those names and pass it explicitly to delegate_start when using harness "codex". Reuses recent checks unless refresh is true. Reads no credentials.`,
     inputSchema: {
       refresh: external_exports.boolean().optional().describe("Force a fresh harness check instead of reusing the recent cached result.")
     },
     annotations: { readOnlyHint: true, openWorldHint: false }
   }, async ({ refresh }) => jsonResult({ ...await runtime.discover({ refresh }), totals: runtime.getUsageTotals() }));
   server.registerTool("delegate_start", {
-    description: "Start an asynchronous bounded task on a local coding harness and return a jobId. Then call delegate_status once with waitSeconds set close to timeoutSeconds \u2014 that call stays open until the job is done, the same way Claude Code's own Agent tool waits for a subagent, so waiting for a result costs one tool call, never a shell sleep. In full permission mode the worker auto-approves its own tool use; the workspace check selects the working directory but is not a sandbox. Review every change before treating the task as done.",
+    description: `Start an asynchronous bounded task on a local coding harness and return a jobId. When harness is "codex", model is required: choose and pass an exact model name from delegate_discover before launch. Then call delegate_status once with waitSeconds set close to timeoutSeconds \u2014 that call stays open until the job is done, the same way Claude Code's own Agent tool waits for a subagent, so waiting for a result costs one tool call, never a shell sleep. In full permission mode the worker auto-approves its own tool use; the workspace check selects the working directory but is not a sandbox. Review every change before treating the task as done.`,
     inputSchema: taskInput,
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
   }, async (input2) => {
@@ -35258,11 +35277,162 @@ var ClaudeCodeAdapter = class {
   }
 };
 
+// src/adapters/codex.ts
+import { existsSync } from "node:fs";
+import { join as join4 } from "node:path";
+var CODEX_DEFAULTS = {
+  executable: "codex"
+};
+var CODEX_MODELS = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
+var CODEX_WORKER_RESULT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["status", "summary", "question", "options", "recommendedOption", "category"],
+  properties: {
+    status: { type: "string", enum: ["completed", "input_required"] },
+    summary: { type: "string", minLength: 1, maxLength: 8e3 },
+    question: { type: ["string", "null"], minLength: 1, maxLength: 8e3 },
+    options: { type: ["array", "null"], maxItems: 10, items: { type: "string", minLength: 1, maxLength: 2e3 } },
+    recommendedOption: { type: ["string", "null"], maxLength: 2e3 },
+    category: { type: ["string", "null"], maxLength: 200 }
+  }
+};
+function parseWorkerResult2(value) {
+  let candidate = value;
+  if (typeof candidate === "string") {
+    try {
+      candidate = JSON.parse(candidate);
+    } catch {
+      return void 0;
+    }
+  }
+  if (!isRecord(candidate) || candidate.status !== "completed" && candidate.status !== "input_required") return void 0;
+  const summary = typeof candidate.summary === "string" ? candidate.summary : void 0;
+  const question = typeof candidate.question === "string" ? candidate.question : void 0;
+  if (!summary || candidate.status === "input_required" && !question) return void 0;
+  const options = Array.isArray(candidate.options) ? candidate.options.filter((option) => typeof option === "string").slice(0, 10) : void 0;
+  return {
+    status: candidate.status,
+    summary,
+    question,
+    options: options?.length ? options : void 0,
+    recommendedOption: typeof candidate.recommendedOption === "string" ? candidate.recommendedOption : void 0,
+    category: typeof candidate.category === "string" ? candidate.category : void 0
+  };
+}
+function errorMessage(event) {
+  if (typeof event.message === "string") return event.message;
+  if (isRecord(event.error) && typeof event.error.message === "string") return event.error.message;
+  if (typeof event.error === "string") return event.error;
+  return void 0;
+}
+var CodexAdapter = class {
+  id = "codex";
+  displayName = "Codex CLI";
+  executable;
+  defaultModel;
+  requiresExplicitModel = true;
+  supportsContinuation = true;
+  outputSchema = CODEX_WORKER_RESULT_SCHEMA;
+  /** Prepended when a Windows npm installation is reached through its JS entry. */
+  entryArgs;
+  constructor(settings = {}) {
+    const configured = settings.executable?.trim();
+    if (configured && /\.(m|c)?js$/i.test(configured)) {
+      this.executable = process.execPath;
+      this.entryArgs = [configured];
+    } else if (configured) {
+      this.executable = configured;
+      this.entryArgs = [];
+    } else if (process.platform === "win32") {
+      const npmEntry = process.env.APPDATA ? join4(process.env.APPDATA, "npm", "node_modules", "@openai", "codex", "bin", "codex.js") : void 0;
+      if (npmEntry && existsSync(npmEntry)) {
+        this.executable = process.execPath;
+        this.entryArgs = [npmEntry];
+      } else {
+        this.executable = CODEX_DEFAULTS.executable;
+        this.entryArgs = [];
+      }
+    } else {
+      this.executable = CODEX_DEFAULTS.executable;
+      this.entryArgs = [];
+    }
+    this.defaultModel = settings.defaultModel?.trim() || void 0;
+  }
+  async probe(run) {
+    const version2 = await run([...this.entryArgs, "--version"]);
+    const login = version2.ok ? await run([...this.entryArgs, "login", "status"]) : void 0;
+    return {
+      installed: version2.ok,
+      version: version2.ok ? version2.stdout.trim() : void 0,
+      authStatus: !version2.ok ? "unavailable" : login?.ok ? "authenticated" : "unauthenticated",
+      // Codex has no command to enumerate account-enabled models, so advertise the
+      // maintained CLI-compatible IDs while leaving final entitlement validation to Codex.
+      models: [...CODEX_MODELS],
+      modelSource: "static",
+      error: !version2.ok ? version2.error : login?.ok ? void 0 : "Codex is installed but not authenticated."
+    };
+  }
+  command(input2) {
+    const args = [...this.entryArgs, "exec"];
+    if (input2.taskMode === "coding" && input2.permissionMode === "full") {
+      args.push("--dangerously-bypass-approvals-and-sandbox");
+    } else {
+      args.push("--sandbox", input2.taskMode === "read_only" ? "read-only" : "workspace-write");
+    }
+    if (input2.conversationId) args.push("resume", input2.conversationId);
+    args.push("--json");
+    if (input2.model) args.push("--model", input2.model);
+    args.push("-c", `model_reasoning_effort=${input2.effort}`);
+    if (input2.outputSchemaPath) args.push("--output-schema", input2.outputSchemaPath);
+    args.push("-");
+    return { command: this.executable, args, cwd: input2.workspace, stdin: input2.prompt };
+  }
+  interpret(event) {
+    const interpretation = {};
+    if (event.type === "thread.started" && typeof event.thread_id === "string") interpretation.sessionId = event.thread_id;
+    const item = isRecord(event.item) ? event.item : void 0;
+    if (item?.type === "command_execution" && typeof item.id === "string") {
+      if (event.type === "item.started") {
+        interpretation.toolCalls = [{ name: "command_execution", phase: "started", id: item.id }];
+      } else if (event.type === "item.completed") {
+        interpretation.toolCalls = [{ name: "command_execution", phase: "completed", ok: item.status !== "failed" && (item.exit_code === void 0 || item.exit_code === 0), id: item.id }];
+      }
+    }
+    if (event.type === "item.completed" && item?.type === "agent_message" && typeof item.text === "string") {
+      const result = parseWorkerResult2(item.text);
+      if (result) {
+        interpretation.workerResult = result;
+        interpretation.summary = result.summary;
+      } else {
+        interpretation.summary = item.text;
+      }
+    }
+    if (event.type === "turn.completed") {
+      const usage = normalizeUsage(event.usage);
+      if (usage) interpretation.usage = usage;
+      interpretation.outcome = "succeeded";
+    }
+    if (event.type === "turn.failed" || event.type === "error") {
+      const message = errorMessage(event) ?? "Codex returned an error.";
+      interpretation.outcome = "failed";
+      interpretation.detail = message;
+      interpretation.failureMessage = message;
+      interpretation.failureSource = "harness";
+    }
+    return interpretation;
+  }
+  classifyFailure(context) {
+    return defaultClassifyFailure(context);
+  }
+};
+
 // src/adapters/index.ts
 function createBuiltInAdapters(config2) {
   return [
     new AntigravityAdapter(config2.harnesses.antigravity ?? {}),
-    new ClaudeCodeAdapter(config2.harnesses["claude-code"] ?? {})
+    new ClaudeCodeAdapter(config2.harnesses["claude-code"] ?? {}),
+    new CodexAdapter(config2.harnesses.codex ?? {})
   ];
 }
 
@@ -35779,8 +35949,12 @@ export {
   BridgeRuntime,
   CLAUDE_CODE_DEFAULTS,
   CLAUDE_CODE_MODELS,
+  CODEX_DEFAULTS,
+  CODEX_MODELS,
+  CODEX_WORKER_RESULT_SCHEMA,
   CORE_ENV,
   ClaudeCodeAdapter,
+  CodexAdapter,
   DEFAULT_HARNESS,
   DEFAULT_TIMEOUT_SECONDS,
   DiscoveryCache,
