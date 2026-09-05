@@ -12,7 +12,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "bump": "node scripts/bump-version.mjs",
     "check:manifests": "node scripts/bump-version.mjs --check",
-    "test": "pnpm build && node --test --test-concurrency=1 test/runtime.test.mjs test/interactive.test.mjs test/claude-code.test.mjs test/adapters.test.mjs test/bundle.test.mjs",
+    "test": "pnpm build && node --test --test-concurrency=1 test/runtime.test.mjs test/interactive.test.mjs test/claude-code.test.mjs test/zcode.test.mjs test/adapters.test.mjs test/bundle.test.mjs",
     "test:fixture": "node --test fixtures/clamp/test/clamp.test.mjs",
     "start": "node dist/index.js"
   },

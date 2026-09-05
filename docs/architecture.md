@@ -13,14 +13,14 @@ Codex (host)                Claude Code (host)
                    ▼
            HarnessAdapter interface
                    │
-       ┌───────────┴───────────┐
-       ▼                       ▼
-AntigravityAdapter        ClaudeCodeAdapter
-agy --output-format ...   claude -p --output-format stream-json ...
-       │                       │
-       ▼                       ▼
-Antigravity CLI            Claude Code CLI
-auth + local coding tools  auth + local coding tools
+       ┌───────────┴───────────┬───────────┐
+       ▼                       ▼           ▼
+AntigravityAdapter        ClaudeCodeAdapter  ZcodeAdapter
+agy --output-format ...   claude -p --output-format stream-json ...   zcode --json --prompt ...
+       │                       │           │
+       ▼                       ▼           ▼
+Antigravity CLI            Claude Code CLI  ZCode CLI
+auth + local coding tools  auth + local coding tools  auth + local coding tools
    (future worker adapters: CodexAdapter, ...)
 ```
 
@@ -35,6 +35,7 @@ A harness can be a **host** (it runs Codexeni as its own MCP server and calls th
 | Codex | yes | not yet (planned) |
 | Claude Code | yes | yes |
 | Antigravity | not yet — works today via `agy mcp add codexeni node <abs path to>/dist/index.js` | yes |
+| ZCode | not yet | yes |
 
 Being a host costs only a manifest, in that harness's own format, that points at the same built `dist/index.js`; being a worker costs one small file under `src/adapters/`. That is why N harnesses need N (manifests) + N (adapters) pieces of work, not N × N: every host launches the identical bundled server, and every worker adapter is driven by the identical harness-neutral runtime. The three shared parts that make this possible are one server bundle (`dist/index.js`), one skill (`skills/delegation/SKILL.md`, installed with either plugin manifest), and one environment-variable naming scheme (`BRIDGE_<HARNESS>_PATH` / `BRIDGE_<HARNESS>_MODEL`).
 
@@ -42,7 +43,7 @@ Being a host costs only a manifest, in that harness's own format, that points at
 
 - `.codex-plugin/` — the Codex host: `plugin.json` (the manifest) plus `mcp.json` (the MCP server definition, referenced from `plugin.json` as `./.codex-plugin/mcp.json`).
 - `.claude-plugin/` — the Claude Code host: `plugin.json`, with the MCP server declared inline using `${CLAUDE_PLUGIN_ROOT}/dist/index.js`.
-- `src/adapters/` — the workers: `antigravity.ts`, `claude-code.ts`, and the shared `adapter.ts` contract.
+- `src/adapters/` — the workers: `antigravity.ts`, `claude-code.ts`, `zcode.ts`, and the shared `adapter.ts` contract.
 - `src/core/`, `src/platform/`, `src/runtime/`, `src/app/` — the shared bridge itself, which never names a specific harness.
 
 **Why the manifests are hand-written, not generated.** Each host reads a different file path and a different schema (Codex wants `mcpServers` as a path to a separate file plus an `env_vars` allow-list; Claude Code wants `mcpServers` inline and uses `${CLAUDE_PLUGIN_ROOT}` instead of an allow-list, because it already passes its whole environment). A generator turning one shared description into both formats would be more code, and a bigger thing to get subtly wrong, than the two small, readable manifests it would replace.
@@ -76,6 +77,8 @@ which resolves to [`plugins/codexeni/.codex-plugin/mcp.json`](../plugins/codexen
         "BRIDGE_ANTIGRAVITY_MODEL",
         "BRIDGE_CLAUDE_CODE_PATH",
         "BRIDGE_CLAUDE_CODE_MODEL",
+        "BRIDGE_ZCODE_PATH",
+        "BRIDGE_ZCODE_MODEL",
         "AGY_BRIDGE_ALLOWED_ROOTS",
         "AGY_BRIDGE_AGY_PATH",
         "AGY_BRIDGE_PERMISSION_MODE",
@@ -113,11 +116,11 @@ The bridge permits up to four concurrent jobs as a local ceiling. This is an imp
 
 ## Source organization
 
-`plugins/codexeni/src` is divided by responsibility. `app/` contains MCP registration and stdio startup; `core/` contains shared types, fixed limits, prompts, usage normalization, redaction, and generic failure parsing; `adapters/` contains the harness contract plus the Antigravity and Claude Code worker implementations; and `platform/` owns environment configuration, child-process primitives, and workspace/root snapshots. `runtime/` coordinates bridge state: `bridge-runtime.ts` is the public facade, while discovery caching, event/status shaping, retry policy, and worker task lifecycle live in focused modules. `src/index.ts` remains the stable public barrel and bundle entry point.
+`plugins/codexeni/src` is divided by responsibility. `app/` contains MCP registration and stdio startup; `core/` contains shared types, fixed limits, prompts, usage normalization, redaction, and generic failure parsing; `adapters/` contains the harness contract plus the Antigravity, Claude Code, and ZCode worker implementations; and `platform/` owns environment configuration, child-process primitives, and workspace/root snapshots. `runtime/` coordinates bridge state: `bridge-runtime.ts` is the public facade, while discovery caching, event/status shaping, retry policy, and worker task lifecycle live in focused modules. `src/index.ts` remains the stable public barrel and bundle entry point.
 
 ## Environment contract
 
-The MCP configuration allow-lists optional bridge environment variables inherited from the orchestrator's process. Every task supplies its exact workspace; the server canonicalizes that path and uses it as the task boundary. `BRIDGE_ALLOWED_ROOTS` is an optional, additional path-delimited allow-list (`;` on Windows, `:` on POSIX), not a source of workspaces. The bridge does not request MCP `roots/list` or subscribe to root-change notifications. `BRIDGE_PERMISSION_MODE` defaults to `full`, adding the worker harness's broad non-interactive permission flag (Antigravity's equivalent is `--dangerously-skip-permissions`); an explicit `BRIDGE_PERMISSION_MODE=restricted` requires per-call approval instead. `BRIDGE_DEFAULT_HARNESS` selects which registered harness `delegate_start` uses when the caller omits `harness` (default `antigravity`). Per-harness settings follow the `BRIDGE_<HARNESS>_PATH` / `BRIDGE_<HARNESS>_MODEL` pattern, one pair per worker adapter — `BRIDGE_ANTIGRAVITY_PATH` and `BRIDGE_ANTIGRAVITY_MODEL` for the Antigravity adapter, `BRIDGE_CLAUDE_CODE_PATH` and `BRIDGE_CLAUDE_CODE_MODEL` for the Claude Code adapter — each overriding that adapter's executable discovery (when the CLI is not on `PATH`) and default model. `BRIDGE_MAX_CONCURRENCY` defaults to 4 and accepts a local ceiling from 1 through 4; higher values are silently clamped to 4. The older `AGY_BRIDGE_*` names still work as fallbacks.
+The MCP configuration allow-lists optional bridge environment variables inherited from the orchestrator's process. Every task supplies its exact workspace; the server canonicalizes that path and uses it as the task boundary. `BRIDGE_ALLOWED_ROOTS` is an optional, additional path-delimited allow-list (`;` on Windows, `:` on POSIX), not a source of workspaces. The bridge does not request MCP `roots/list` or subscribe to root-change notifications. `BRIDGE_PERMISSION_MODE` defaults to `full`, adding the worker harness's broad non-interactive permission flag (Antigravity's equivalent is `--dangerously-skip-permissions`); an explicit `BRIDGE_PERMISSION_MODE=restricted` requires per-call approval instead. `BRIDGE_DEFAULT_HARNESS` selects which registered harness `delegate_start` uses when the caller omits `harness` (default `antigravity`). Per-harness settings follow the `BRIDGE_<HARNESS>_PATH` / `BRIDGE_<HARNESS>_MODEL` pattern, one pair per worker adapter — `BRIDGE_ANTIGRAVITY_PATH` and `BRIDGE_ANTIGRAVITY_MODEL` for the Antigravity adapter, `BRIDGE_CLAUDE_CODE_PATH` and `BRIDGE_CLAUDE_CODE_MODEL` for the Claude Code adapter, `BRIDGE_ZCODE_PATH` and `BRIDGE_ZCODE_MODEL` for the ZCode adapter — each overriding that adapter's executable discovery (when the CLI is not on `PATH`) and default model. `BRIDGE_MAX_CONCURRENCY` defaults to 4 and accepts a local ceiling from 1 through 4; higher values are silently clamped to 4. The older `AGY_BRIDGE_*` names still work as fallbacks.
 
 No environment configuration is required for the default full-permission workflow. Set optional overrides before launching the orchestrator, then restart it so the newly spawned MCP process inherits them. The server never substitutes `${PLUGIN_ROOT}` or its own `process.cwd` for the workspace requested by a task. These checks select the worker cwd; they are not hard operating-system containment. The bridge passes `--sandbox` best-effort, but an explicit full-permission override is not a guaranteed boundary for every Antigravity tool or platform.
 

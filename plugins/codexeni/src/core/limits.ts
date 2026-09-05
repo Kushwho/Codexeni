@@ -21,6 +21,8 @@ export const LIMITS = {
   maxInputOptions: 10,
   /** Longest string kept from any single child-output value. */
   maxEventChars: 8_000,
+  /** Whole-stdout buffer kept for adapters that interpret one document rather than JSON lines. */
+  maxStdoutChars: 1_000_000,
   /** Files inspected when snapshotting a workspace for change detection. */
   snapshotMaxEntries: 20_000,
   /** Time allowed for a harness probe command such as `--version`. */
