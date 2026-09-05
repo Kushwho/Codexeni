@@ -68,6 +68,7 @@ export class CodexAdapter implements HarnessAdapter {
   public readonly displayName = "Codex CLI";
   public readonly executable: string;
   public readonly defaultModel?: string;
+  public readonly requiresExplicitModel = true;
   public readonly supportsContinuation = true;
   public readonly outputSchema: Record<string, unknown> = CODEX_WORKER_RESULT_SCHEMA;
 
@@ -117,6 +118,11 @@ export class CodexAdapter implements HarnessAdapter {
 
   public command(input: TaskLaunch): SpawnSpec {
     const args = [...this.entryArgs, "exec"];
+    if (input.taskMode === "coding" && input.permissionMode === "full") {
+      args.push("--dangerously-bypass-approvals-and-sandbox");
+    } else {
+      args.push("--sandbox", input.taskMode === "read_only" ? "read-only" : "workspace-write");
+    }
     if (input.conversationId) args.push("resume", input.conversationId);
     args.push("--json");
     if (input.model) args.push("--model", input.model);
@@ -124,12 +130,6 @@ export class CodexAdapter implements HarnessAdapter {
     // own config.toml uses for this, so -c overrides it per invocation instead.
     args.push("-c", `model_reasoning_effort=${input.effort}`);
     if (input.outputSchemaPath) args.push("--output-schema", input.outputSchemaPath);
-
-    if (input.taskMode === "coding" && input.permissionMode === "full") {
-      args.push("--dangerously-bypass-approvals-and-sandbox");
-    } else if (!input.conversationId) {
-      args.push("--sandbox", input.taskMode === "read_only" ? "read-only" : "workspace-write");
-    }
 
     // `-` keeps long prompts and clarification answers out of argv on every platform.
     args.push("-");

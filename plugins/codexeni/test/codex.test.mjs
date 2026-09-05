@@ -17,7 +17,7 @@ const SUCCESS_EVENTS = [
 test("command() keeps prompts on stdin and maps each Codex permission mode", () => {
   const adapter = new bridge.CodexAdapter({ executable: "fake-codex", defaultModel: "gpt-test" });
   const readOnly = adapter.command({ prompt: "review", workspace: "w", model: "gpt-test", effort: "high", permissionMode: "full", taskMode: "read_only", outputSchemaPath: "schema.json" });
-  assert.deepEqual(readOnly.args, ["exec", "--json", "--model", "gpt-test", "-c", "model_reasoning_effort=high", "--output-schema", "schema.json", "--sandbox", "read-only", "-"]);
+  assert.deepEqual(readOnly.args, ["exec", "--sandbox", "read-only", "--json", "--model", "gpt-test", "-c", "model_reasoning_effort=high", "--output-schema", "schema.json", "-"]);
   assert.equal(readOnly.stdin, "review");
   assert.ok(!readOnly.args.includes("review"));
 
@@ -26,11 +26,18 @@ test("command() keeps prompts on stdin and maps each Codex permission mode", () 
   assert.ok(!fullCoding.args.includes("--sandbox"));
 
   const restrictedCoding = adapter.command({ prompt: "edit", workspace: "w", effort: "high", permissionMode: "restricted", taskMode: "coding" });
-  assert.deepEqual(restrictedCoding.args.slice(-3), ["--sandbox", "workspace-write", "-"]);
+  assert.deepEqual(restrictedCoding.args.slice(0, 3), ["exec", "--sandbox", "workspace-write"]);
+  assert.equal(restrictedCoding.args.at(-1), "-");
 
-  const resumed = adapter.command({ prompt: "continue", workspace: "w", model: "gpt-test", effort: "low", permissionMode: "full", taskMode: "coding", conversationId: "thread-1", outputSchemaPath: "schema.json" });
-  assert.deepEqual(resumed.args.slice(0, 9), ["exec", "resume", "thread-1", "--json", "--model", "gpt-test", "-c", "model_reasoning_effort=low", "--output-schema"]);
-  assert.ok(resumed.args.includes("--dangerously-bypass-approvals-and-sandbox"));
+  const resumedReadOnly = adapter.command({ prompt: "continue", workspace: "w", model: "gpt-test", effort: "low", permissionMode: "full", taskMode: "read_only", conversationId: "thread-1" });
+  assert.deepEqual(resumedReadOnly.args.slice(0, 5), ["exec", "--sandbox", "read-only", "resume", "thread-1"]);
+
+  const resumedRestrictedCoding = adapter.command({ prompt: "continue", workspace: "w", model: "gpt-test", effort: "low", permissionMode: "restricted", taskMode: "coding", conversationId: "thread-1" });
+  assert.deepEqual(resumedRestrictedCoding.args.slice(0, 5), ["exec", "--sandbox", "workspace-write", "resume", "thread-1"]);
+
+  const resumedFullCoding = adapter.command({ prompt: "continue", workspace: "w", model: "gpt-test", effort: "low", permissionMode: "full", taskMode: "coding", conversationId: "thread-1", outputSchemaPath: "schema.json" });
+  assert.deepEqual(resumedFullCoding.args.slice(0, 9), ["exec", "--dangerously-bypass-approvals-and-sandbox", "resume", "thread-1", "--json", "--model", "gpt-test", "-c", "model_reasoning_effort=low"]);
+  assert.ok(resumedFullCoding.args.includes("--dangerously-bypass-approvals-and-sandbox"));
 });
 
 test("probe() reports CLI state without retaining login output and exposes the static compatible model list", async () => {
@@ -99,10 +106,12 @@ test("runtime requires an explicit model before launching a Codex worker", async
   const { root } = await makeWorkspace();
   const { spawnImpl } = createFakeSpawn();
   const runtime = makeRuntime(bridge, root, {}, { spawnImpl });
-  runtime.registerAdapter(new bridge.CodexAdapter({ executable: "fake-codex", defaultModel: "gpt-5.6-sol" }));
+  const adapter = new bridge.CodexAdapter({ executable: "fake-codex", defaultModel: "gpt-5.6-sol" });
+  assert.equal(adapter.requiresExplicitModel, true);
+  runtime.registerAdapter(adapter);
   await assert.rejects(
     () => runtime.startTask({ task: "review", workspace: root, harness: "codex", taskMode: "read_only" }),
-    /model is required when harness is "codex"/,
+    { message: "model is required when harness is \"codex\". Choose an exact model from delegate_discover before starting the task." },
   );
   await runtime.shutdown();
 });

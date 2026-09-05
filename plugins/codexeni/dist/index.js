@@ -1321,8 +1321,8 @@ var BridgeRuntime = class {
     const adapter = this.getAdapter(input2.harness ?? this.config.defaultHarness);
     if (!input2.task.trim()) throw new Error("Task must not be empty.");
     if (!input2.workspace.trim()) throw new Error("Workspace must not be empty.");
-    if (adapter.id === "codex" && !input2.model?.trim()) {
-      throw new Error('model is required when harness is "codex". Choose an exact model from delegate_discover before starting the task.');
+    if (adapter.requiresExplicitModel && !input2.model?.trim()) {
+      throw new Error(`model is required when harness is "${adapter.id}". Choose an exact model from delegate_discover before starting the task.`);
     }
     if (input2.timeoutSeconds !== void 0 && (!Number.isSafeInteger(input2.timeoutSeconds) || input2.timeoutSeconds <= 0 || input2.timeoutSeconds > this.config.defaultTimeoutSeconds)) {
       throw new Error(`timeoutSeconds must be a positive integer no greater than ${this.config.defaultTimeoutSeconds}.`);
@@ -35331,6 +35331,7 @@ var CodexAdapter = class {
   displayName = "Codex CLI";
   executable;
   defaultModel;
+  requiresExplicitModel = true;
   supportsContinuation = true;
   outputSchema = CODEX_WORKER_RESULT_SCHEMA;
   /** Prepended when a Windows npm installation is reached through its JS entry. */
@@ -35374,16 +35375,16 @@ var CodexAdapter = class {
   }
   command(input2) {
     const args = [...this.entryArgs, "exec"];
+    if (input2.taskMode === "coding" && input2.permissionMode === "full") {
+      args.push("--dangerously-bypass-approvals-and-sandbox");
+    } else {
+      args.push("--sandbox", input2.taskMode === "read_only" ? "read-only" : "workspace-write");
+    }
     if (input2.conversationId) args.push("resume", input2.conversationId);
     args.push("--json");
     if (input2.model) args.push("--model", input2.model);
     args.push("-c", `model_reasoning_effort=${input2.effort}`);
     if (input2.outputSchemaPath) args.push("--output-schema", input2.outputSchemaPath);
-    if (input2.taskMode === "coding" && input2.permissionMode === "full") {
-      args.push("--dangerously-bypass-approvals-and-sandbox");
-    } else if (!input2.conversationId) {
-      args.push("--sandbox", input2.taskMode === "read_only" ? "read-only" : "workspace-write");
-    }
     args.push("-");
     return { command: this.executable, args, cwd: input2.workspace, stdin: input2.prompt };
   }

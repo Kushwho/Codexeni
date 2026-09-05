@@ -78,6 +78,8 @@ export interface HarnessAdapter {
   readonly executable: string;
   /** Model used when the caller does not choose one; undefined lets the harness pick its own. */
   readonly defaultModel?: string;
+  /** Whether callers must select a model explicitly instead of using the harness default. */
+  readonly requiresExplicitModel?: boolean;
   /** Whether this harness can resume an exited conversation after an input request. */
   readonly supportsContinuation?: boolean;
   /** Optional final-response schema written to the job's private temporary directory before launch. */
