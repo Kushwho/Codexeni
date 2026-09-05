@@ -1,6 +1,6 @@
 # Codexeni
 
-Codexeni lets one coding harness delegate bounded tasks to another local coding harness through MCP; Antigravity, Claude Code, and Codex are the built-in workers. The calling harness remains the orchestrator: it scopes the task, reviews changes, and runs final verification.
+Codexeni lets one coding harness delegate bounded tasks to another local coding harness through MCP. Antigravity, Claude Code, and Codex CLI can each run as worker subagents. The calling harness remains the orchestrator: it scopes the task, reviews changes, and runs final verification.
 
 > Unofficial project. Not affiliated with Google, Antigravity, Gemini, Anthropic, Claude, or OpenAI.
 
@@ -10,7 +10,7 @@ A harness can play either or both of two roles: **host**, meaning it runs Codexe
 
 | Harness | Host (orchestrator) | Worker (subagent) |
 | --- | --- | --- |
-| Codex | yes | yes |
+| Codex CLI | yes | yes |
 | Claude Code | yes | yes |
 | Antigravity | not yet — works today via `agy mcp add codexeni node <abs path to>/dist/index.js` | yes |
 
@@ -72,7 +72,9 @@ Ask the orchestrating harness to delegate a small, explicit task, for example:
 Use delegate_discover to see which harnesses are installed, then delegate a read-only review of src/auth.ts to antigravity.
 ```
 
-To have Claude Code orchestrate the local Codex CLI, name the worker and explicitly select a model returned by `delegate_discover`:
+### Codex as a worker subagent
+
+Claude Code and Codex can both orchestrate the local Codex CLI. Name `codex` as the worker and explicitly select a model returned by `delegate_discover`; Codex does not provide a CLI command that can enumerate the models available to your account.
 
 ```text
 Use delegate_discover, then delegate a read-only review of src/auth.ts to codex with model gpt-5.6-luna. Do not edit files; report findings with file and line numbers.
