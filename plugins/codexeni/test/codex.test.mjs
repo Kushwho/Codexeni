@@ -38,6 +38,11 @@ test("command() keeps prompts on stdin and maps each Codex permission mode", () 
   const resumedFullCoding = adapter.command({ prompt: "continue", workspace: "w", model: "gpt-test", effort: "low", permissionMode: "full", taskMode: "coding", conversationId: "thread-1", outputSchemaPath: "schema.json" });
   assert.deepEqual(resumedFullCoding.args.slice(0, 9), ["exec", "--dangerously-bypass-approvals-and-sandbox", "resume", "thread-1", "--json", "--model", "gpt-test", "-c", "model_reasoning_effort=low"]);
   assert.ok(resumedFullCoding.args.includes("--dangerously-bypass-approvals-and-sandbox"));
+
+  for (const effort of ["xhigh", "max"]) {
+    const spec = adapter.command({ prompt: "review", workspace: "w", model: "gpt-5.6-luna", effort, permissionMode: "full", taskMode: "read_only" });
+    assert.ok(spec.args.includes(`model_reasoning_effort=${effort}`));
+  }
 });
 
 test("probe() reports CLI state without retaining login output and exposes the static compatible model list", async () => {
@@ -47,6 +52,7 @@ test("probe() reports CLI state without retaining login output and exposes the s
     : { ok: true, stdout: "codex-cli 0.153.2\n", stderr: "" });
   assert.equal(authenticated.authStatus, "authenticated");
   assert.deepEqual(authenticated.models, ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
+  assert.deepEqual(adapter.supportedEfforts, ["low", "medium", "high", "xhigh", "max"]);
   assert.equal(authenticated.modelSource, "static");
   assert.ok(!JSON.stringify(authenticated).includes("fake@example.com"));
 

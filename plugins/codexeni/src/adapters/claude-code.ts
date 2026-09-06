@@ -1,6 +1,6 @@
 import { defaultClassifyFailure } from "../core/failure.js";
 import type { ToolCallObservation } from "../core/metrics.js";
-import type { ErrorCategory, HarnessSettings } from "../core/types.js";
+import { STANDARD_EFFORT_LEVELS, type ErrorCategory, type HarnessSettings } from "../core/types.js";
 import { normalizeUsage } from "../core/usage.js";
 import { isRecord } from "../core/value.js";
 import type { CommandRunner, HarnessAdapter, HarnessProbe, Interpretation, SpawnSpec, TaskLaunch } from "./adapter.js";
@@ -81,6 +81,7 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
   public readonly displayName = "Claude Code";
   public readonly executable: string;
   public readonly defaultModel: string;
+  public readonly supportedEfforts = STANDARD_EFFORT_LEVELS;
 
   public constructor(settings: HarnessSettings = {}) {
     this.executable = settings.executable ?? CLAUDE_CODE_DEFAULTS.executable;

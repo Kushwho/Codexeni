@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { defaultClassifyFailure } from "../core/failure.js";
-import type { ErrorCategory, HarnessSettings, WorkerResult } from "../core/types.js";
+import { EFFORT_LEVELS, type ErrorCategory, type HarnessSettings, type WorkerResult } from "../core/types.js";
 import { normalizeUsage } from "../core/usage.js";
 import { isRecord } from "../core/value.js";
 import type { CommandRunner, HarnessAdapter, HarnessProbe, Interpretation, SpawnSpec, TaskLaunch } from "./adapter.js";
@@ -70,6 +70,7 @@ export class CodexAdapter implements HarnessAdapter {
   public readonly defaultModel?: string;
   public readonly requiresExplicitModel = true;
   public readonly supportsContinuation = true;
+  public readonly supportedEfforts = EFFORT_LEVELS;
   public readonly outputSchema: Record<string, unknown> = CODEX_WORKER_RESULT_SCHEMA;
 
   /** Prepended when a Windows npm installation is reached through its JS entry. */

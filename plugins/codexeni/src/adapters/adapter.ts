@@ -82,6 +82,8 @@ export interface HarnessAdapter {
   readonly requiresExplicitModel?: boolean;
   /** Whether this harness can resume an exited conversation after an input request. */
   readonly supportsContinuation?: boolean;
+  /** Reasoning effort values this adapter can honor for a delegated task. */
+  readonly supportedEfforts: readonly Effort[];
   /** Optional final-response schema written to the job's private temporary directory before launch. */
   readonly outputSchema?: Record<string, unknown>;
   /**

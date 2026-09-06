@@ -34,6 +34,7 @@ export interface HarnessReport extends HarnessProbe {
   displayName: string;
   executable: string;
   defaultModel?: string;
+  supportedEfforts: readonly Effort[];
 }
 
 /**
@@ -139,7 +140,14 @@ export class BridgeRuntime {
     const harnesses: Record<string, HarnessReport> = {};
     for (const adapter of this.adapters.values()) {
       const probe = await this.discovery.get(adapter.id, options.refresh === true, () => this.runAdapterProbe(adapter));
-      harnesses[adapter.id] = { id: adapter.id, displayName: adapter.displayName, executable: adapter.executable, defaultModel: adapter.defaultModel, ...probe };
+      harnesses[adapter.id] = {
+        id: adapter.id,
+        displayName: adapter.displayName,
+        executable: adapter.executable,
+        defaultModel: adapter.defaultModel,
+        supportedEfforts: adapter.supportedEfforts,
+        ...probe,
+      };
     }
     return {
       defaultHarness: this.config.defaultHarness,
@@ -182,6 +190,10 @@ export class BridgeRuntime {
     if (input.maxRetries !== undefined && (!Number.isSafeInteger(input.maxRetries) || input.maxRetries < 0 || input.maxRetries > LIMITS.readOnlyMaxRetries)) {
       throw new Error(`maxRetries must be an integer from 0 to ${LIMITS.readOnlyMaxRetries}.`);
     }
+    const effort = input.effort ?? "high";
+    if (!adapter.supportedEfforts.includes(effort)) {
+      throw new Error(`effort "${effort}" is not supported by harness "${adapter.id}". Supported efforts: ${adapter.supportedEfforts.join(", ")}.`);
+    }
     const taskMode = input.taskMode ?? "coding";
     if (taskMode !== "coding" && taskMode !== "read_only") throw new Error("taskMode must be either coding or read_only.");
     const selection = adapter.resolveSelection?.(input.model, input.effort) ?? {};
@@ -204,7 +216,7 @@ export class BridgeRuntime {
       task: input.task,
       workspace,
       model,
-      effort: input.effort ?? "high",
+      effort,
       timeoutSeconds: Math.min(input.timeoutSeconds ?? this.config.defaultTimeoutSeconds, this.config.defaultTimeoutSeconds),
       permissionMode: this.config.permissionMode,
       taskMode,

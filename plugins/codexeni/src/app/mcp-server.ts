@@ -4,7 +4,7 @@ import { z } from "zod";
 import { LIMITS } from "../core/limits.js";
 import { hashQuestion, NonceLedger, type SealedInputState } from "./input-state.js";
 import type { BridgeRuntime } from "../runtime/bridge-runtime.js";
-import type { InputRequest } from "../core/types.js";
+import { EFFORT_LEVELS, type InputRequest } from "../core/types.js";
 
 /** What runtime.getPendingInput reports: the worker's question plus its place in the round budget. */
 type PendingInput = InputRequest & { round: number; maxRounds: number };
@@ -80,7 +80,7 @@ export function createMcpServer(runtime: BridgeRuntime, deps: McpServerDeps = {}
     workspace: z.string().min(1).describe("Absolute path of the orchestrator's current workspace; in zero-config mode this exact canonical directory is the task boundary."),
     harness: z.string().min(1).max(100).optional().describe("Harness id from delegate_discover (for example \"antigravity\" or \"claude-code\"). Defaults to the configured default harness."),
     model: z.string().min(1).max(200).optional().describe("Exact model slug from delegate_discover. Required when harness is \"codex\" so the orchestrator records the chosen Codex model before launch; optional for other harnesses."),
-    effort: z.enum(["low", "medium", "high"]).optional(),
+    effort: z.enum(EFFORT_LEVELS).optional().describe("Reasoning effort supported by the selected harness; inspect its supportedEfforts field in delegate_discover before choosing."),
     taskMode: z.enum(["coding", "read_only"]).optional().describe("read_only forbids workspace changes and allows bounded automatic retries; coding never retries."),
     maxRetries: z.number().int().min(0).max(LIMITS.readOnlyMaxRetries).optional(),
     timeoutSeconds: z.number().int().positive().max(runtime.config.defaultTimeoutSeconds).optional(),
