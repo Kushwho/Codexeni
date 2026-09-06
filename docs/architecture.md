@@ -13,18 +13,17 @@ Codex (host)                Claude Code (host)
                    ▼
            HarnessAdapter interface
                    │
-       ┌───────────┴───────────┐
-       ▼                       ▼
-AntigravityAdapter        ClaudeCodeAdapter
-agy --output-format ...   claude -p --output-format stream-json ...
-       │                       │
-       ▼                       ▼
-Antigravity CLI            Claude Code CLI
-auth + local coding tools  auth + local coding tools
-   (future worker adapters: CodexAdapter, ...)
+       ┌───────────┴───────────┬───────────┐
+       ▼                       ▼           ▼
+AntigravityAdapter        ClaudeCodeAdapter CodexAdapter
+agy --output-format ...   claude -p --output-format stream-json ...  codex exec --json ...
+       │                       │           │
+       ▼                       ▼           ▼
+Antigravity CLI            Claude Code CLI Codex CLI
+auth + local coding tools  auth + local coding tools auth + local coding tools
 ```
 
-The same two adapters can also run as the orchestrator's own harness: `delegate_discover` lists `claude-code` from inside a Claude Code host, or `antigravity` once Antigravity gains a host manifest, exactly like any other worker.
+The same adapters can also run as the orchestrator's own harness: `delegate_discover` lists `claude-code` from inside a Claude Code host, or `codex` from either existing host, exactly like any other worker.
 
 ## Two roles: host and worker
 
@@ -32,7 +31,7 @@ A harness can be a **host** (it runs Codexeni as its own MCP server and calls th
 
 | Harness | Host (orchestrator) | Worker (subagent) |
 | --- | --- | --- |
-| Codex | yes | not yet (planned) |
+| Codex | yes | yes |
 | Claude Code | yes | yes |
 | Antigravity | not yet — works today via `agy mcp add codexeni node <abs path to>/dist/index.js` | yes |
 
@@ -42,7 +41,7 @@ Being a host costs only a manifest, in that harness's own format, that points at
 
 - `.codex-plugin/` — the Codex host: `plugin.json` (the manifest) plus `mcp.json` (the MCP server definition, referenced from `plugin.json` as `./.codex-plugin/mcp.json`).
 - `.claude-plugin/` — the Claude Code host: `plugin.json`, with the MCP server declared inline using `${CLAUDE_PLUGIN_ROOT}/dist/index.js`.
-- `src/adapters/` — the workers: `antigravity.ts`, `claude-code.ts`, and the shared `adapter.ts` contract.
+- `src/adapters/` — the workers: `antigravity.ts`, `claude-code.ts`, `codex.ts`, and the shared `adapter.ts` contract.
 - `src/core/`, `src/platform/`, `src/runtime/`, `src/app/` — the shared bridge itself, which never names a specific harness.
 
 **Why the manifests are hand-written, not generated.** Each host reads a different file path and a different schema (Codex wants `mcpServers` as a path to a separate file plus an `env_vars` allow-list; Claude Code wants `mcpServers` inline and uses `${CLAUDE_PLUGIN_ROOT}` instead of an allow-list, because it already passes its whole environment). A generator turning one shared description into both formats would be more code, and a bigger thing to get subtly wrong, than the two small, readable manifests it would replace.
@@ -76,6 +75,7 @@ which resolves to [`plugins/codexeni/.codex-plugin/mcp.json`](../plugins/codexen
         "BRIDGE_ANTIGRAVITY_MODEL",
         "BRIDGE_CLAUDE_CODE_PATH",
         "BRIDGE_CLAUDE_CODE_MODEL",
+        "BRIDGE_CODEX_PATH",
         "AGY_BRIDGE_ALLOWED_ROOTS",
         "AGY_BRIDGE_AGY_PATH",
         "AGY_BRIDGE_PERMISSION_MODE",
@@ -113,7 +113,7 @@ The bridge permits up to four concurrent jobs as a local ceiling. This is an imp
 
 ## Source organization
 
-`plugins/codexeni/src` is divided by responsibility. `app/` contains MCP registration and stdio startup; `core/` contains shared types, fixed limits, prompts, usage normalization, redaction, and generic failure parsing; `adapters/` contains the harness contract plus the Antigravity and Claude Code worker implementations; and `platform/` owns environment configuration, child-process primitives, and workspace/root snapshots. `runtime/` coordinates bridge state: `bridge-runtime.ts` is the public facade, while discovery caching, event/status shaping, retry policy, and worker task lifecycle live in focused modules. `src/index.ts` remains the stable public barrel and bundle entry point.
+`plugins/codexeni/src` is divided by responsibility. `app/` contains MCP registration and stdio startup; `core/` contains shared types, fixed limits, prompts, usage normalization, redaction, and generic failure parsing; `adapters/` contains the harness contract plus the Antigravity, Claude Code, and Codex worker implementations; and `platform/` owns environment configuration, child-process primitives, and workspace/root snapshots. `runtime/` coordinates bridge state: `bridge-runtime.ts` is the public facade, while discovery caching, event/status shaping, retry policy, and worker task lifecycle live in focused modules. `src/index.ts` remains the stable public barrel and bundle entry point.
 
 ## Environment contract
 
@@ -129,7 +129,7 @@ No environment configuration is required for the default full-permission workflo
 
 ### Interactive delegation
 
-An adapter can report a bounded input request instead of a terminal result. The runtime records `awaiting_input`, the sanitized `inputRequest`, `interactionRound`, and `continuationSupported` in `delegate_status`. `delegate_respond` either supplies a bounded answer to `BridgeRuntime.respondTask(jobId, answer, answeredBy)` or returns the request to the host through the MCP 2026-07-28 MRTR `InputRequiredResult` flow. A legacy elicitation shim supports older hosts. Continuations are new worker processes linked to the original conversation (`agy --conversation <id>`); the bridge does not run a separate MCP server per worker. One Codexeni MCP server coordinates many CLI adapters and jobs.
+An adapter can report a bounded input request instead of a terminal result. The runtime records `awaiting_input`, the sanitized `inputRequest`, `interactionRound`, and `continuationSupported` in `delegate_status`. `delegate_respond` either supplies a bounded answer to `BridgeRuntime.respondTask(jobId, answer, answeredBy)` or returns the request to the host through the MCP 2026-07-28 MRTR `InputRequiredResult` flow. A legacy elicitation shim supports older hosts. Continuations are new worker processes linked to the original conversation, such as `agy --conversation <id>` or `codex exec resume <thread-id>`; the bridge does not run a separate MCP server per worker. One Codexeni MCP server coordinates many CLI adapters and jobs.
 
 The orchestrator may automatically answer only safe, repository-supported, reversible, in-scope details. Product choices, scope changes, destructive actions, permission prompts, and anything secret must be returned to a human. The bridge never elicits credentials or private auth state and caps interaction at three rounds.
 4. The worker emits NDJSON. The server stores a bounded, sanitized event tail and a sanitized temporary log outside the repository. Logs are not returned wholesale.
@@ -153,6 +153,8 @@ The orchestrator may automatically answer only safe, repository-supported, rever
 The bridge intentionally inherits the local user's permissions for whichever worker CLI it runs. That can include filesystem writes, shell commands, network access, and access beyond the selected workspace in full mode. The bridge requests a sandbox where the worker offers one (Antigravity's `--sandbox`), but on some platforms or for some tools this is not a complete filesystem boundary. The default workflow therefore requires approval for task starts, validates the selected workspace, uses exact model selection, and asks the worker not to read or print secrets. These controls reduce risk but are not a sandbox or a security guarantee.
 
 **Claude Code worker's permission mapping.** `taskMode: "coding"` in `full` permission mode passes `--dangerously-skip-permissions`, the same auto-approve-everything behavior as Antigravity's flag of the same name; in `restricted` mode it instead passes `--permission-mode acceptEdits`, which still auto-approves file edits but leaves other tool use to Claude Code's own prompts. `taskMode: "read_only"` never uses either of those: regardless of permission mode it runs with `--permission-mode dontAsk --disallowedTools Edit,Write,MultiEdit,NotebookEdit`, so the edit tools are unavailable to the model and only Claude Code's own read-only command set is approved. This mapping lives in `ClaudeCodeAdapter.command()` in [`plugins/codexeni/src/adapters/claude-code.ts`](../plugins/codexeni/src/adapters/claude-code.ts).
+
+**Codex worker's permission mapping.** `taskMode: "read_only"` uses `codex exec --sandbox read-only`. A restricted coding task uses `--sandbox workspace-write`; a full coding task deliberately uses `--dangerously-bypass-approvals-and-sandbox`, with no sandbox flag, so it matches the bridge's existing broad-authority full mode. Codex emits JSONL through `codex exec --json`; the adapter reads its thread ID, structured final message, command events, terminal usage, and error events. It resumes an eligible job with `codex exec resume <thread-id>`.
 
 Additional limits, consolidated in [`SECURITY.md`](../SECURITY.md): event and log redaction covers labeled fields only; the changed-file inventory is metadata-based (size and mtime) and treats `.git`, `node_modules`, `dist`, `build`, and similar excluded directories as blind spots; and Windows requires the native `agy` executable because `.cmd`/`.bat` shims cannot be spawned without a shell.
 

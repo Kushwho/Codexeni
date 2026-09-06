@@ -1,5 +1,7 @@
 import type { ChildProcess } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 
 import type { HarnessAdapter } from "../adapters/adapter.js";
 import { LIMITS } from "../core/limits.js";
@@ -38,6 +40,16 @@ export class TaskLifecycle {
 
   public launch(record: TaskRecord, continuationPrompt?: string): void {
     const adapter = this.dependencies.getAdapter(record.harness);
+    let outputSchemaPath: string | undefined;
+    try {
+      if (adapter.outputSchema) {
+        outputSchemaPath = join(dirname(record.logPath), "worker-result.schema.json");
+        writeFileSync(outputSchemaPath, `${JSON.stringify(adapter.outputSchema)}\n`, "utf8");
+      }
+    } catch (error) {
+      void this.finalize(record, "failed", `Could not prepare ${adapter.displayName} output schema: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
     const spec = adapter.command({
       prompt: continuationPrompt === undefined
         ? buildDelegationPrompt(record.task, record.workspace, record.taskMode)
@@ -49,6 +61,7 @@ export class TaskLifecycle {
       permissionMode: record.permissionMode,
       taskMode: record.taskMode,
       conversationId: continuationPrompt === undefined ? undefined : record.conversationId,
+      outputSchemaPath,
     });
     let child: ChildProcess;
     try {

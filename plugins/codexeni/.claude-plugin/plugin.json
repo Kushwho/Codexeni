@@ -1,7 +1,7 @@
 {
   "name": "codexeni",
-  "version": "0.1.0-dev.20260829201950",
-  "description": "Codexeni lets any MCP-speaking coding harness delegate bounded coding work to another authenticated local coding harness; Antigravity and Claude Code are the built-in workers.",
+  "version": "0.1.0-dev.20260905192415",
+  "description": "Codexeni lets any MCP-speaking coding harness delegate bounded coding work to another authenticated local coding harness; Antigravity, Claude Code, and Codex CLI are the built-in workers.",
   "author": {
     "name": "Kushwho",
     "url": "https://github.com/Kushwho"

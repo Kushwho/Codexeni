@@ -26,5 +26,6 @@ export * from "./app/mcp-server.js";
 export * from "./adapters/adapter.js";
 export * from "./adapters/antigravity.js";
 export * from "./adapters/claude-code.js";
+export * from "./adapters/codex.js";
 export * from "./adapters/index.js";
 export { runStdioServer } from "./app/entry.js";

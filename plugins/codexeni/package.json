@@ -1,6 +1,6 @@
 {
   "name": "codexeni",
-  "version": "0.1.0-dev.20260829201950",
+  "version": "0.1.0-dev.20260905192415",
   "private": true,
   "type": "module",
   "description": "Codexeni MCP bridge that lets one coding harness delegate bounded tasks to another local coding harness.",
@@ -12,7 +12,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "bump": "node scripts/bump-version.mjs",
     "check:manifests": "node scripts/bump-version.mjs --check",
-    "test": "pnpm build && node --test --test-concurrency=1 test/runtime.test.mjs test/interactive.test.mjs test/claude-code.test.mjs test/adapters.test.mjs test/bundle.test.mjs",
+    "test": "pnpm build && node --test --test-concurrency=1 test/runtime.test.mjs test/interactive.test.mjs test/claude-code.test.mjs test/codex.test.mjs test/adapters.test.mjs test/bundle.test.mjs",
     "test:fixture": "node --test fixtures/clamp/test/clamp.test.mjs",
     "start": "node dist/index.js"
   },

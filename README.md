@@ -1,6 +1,6 @@
 # Codexeni
 
-Codexeni lets one coding harness delegate bounded tasks to another local coding harness through MCP; Antigravity and Claude Code are the built-in workers, more adapters are planned. The calling harness remains the orchestrator: it scopes the task, reviews changes, and runs final verification.
+Codexeni lets one coding harness delegate bounded tasks to another local coding harness through MCP. Antigravity, Claude Code, and Codex CLI can each run as worker subagents. The calling harness remains the orchestrator: it scopes the task, reviews changes, and runs final verification.
 
 > Unofficial project. Not affiliated with Google, Antigravity, Gemini, Anthropic, Claude, or OpenAI.
 
@@ -10,7 +10,7 @@ A harness can play either or both of two roles: **host**, meaning it runs Codexe
 
 | Harness | Host (orchestrator) | Worker (subagent) |
 | --- | --- | --- |
-| Codex | yes | not yet (planned) |
+| Codex CLI | yes | yes |
 | Claude Code | yes | yes |
 | Antigravity | not yet — works today via `agy mcp add codexeni node <abs path to>/dist/index.js` | yes |
 
@@ -22,6 +22,7 @@ Worker requirement, depending on which worker you plan to delegate to:
 
 - Antigravity worker: `agy` installed and authenticated; `gemini-3.7-flash-high` listed by `agy models`.
 - Claude Code worker: `claude` installed and logged in (`claude auth status`).
+- Codex worker: `codex` installed and logged in (`codex login status`).
 
 Pick the host you want to run Codexeni's tools from.
 
@@ -71,6 +72,14 @@ Ask the orchestrating harness to delegate a small, explicit task, for example:
 Use delegate_discover to see which harnesses are installed, then delegate a read-only review of src/auth.ts to antigravity.
 ```
 
+### Codex as a worker subagent
+
+Claude Code and Codex can both orchestrate the local Codex CLI. Name `codex` as the worker and explicitly select a model returned by `delegate_discover`; Codex does not provide a CLI command that can enumerate the models available to your account.
+
+```text
+Use delegate_discover, then delegate a read-only review of src/auth.ts to codex with model gpt-5.6-luna. Do not edit files; report findings with file and line numbers.
+```
+
 For a coding task, name the workspace, allowed files, and required tests. Codexeni exposes:
 
 - `delegate_discover`
@@ -86,7 +95,7 @@ If a worker asks a question, `delegate_status` reports `status: "awaiting_input"
 ## Defaults
 
 - Default harness: `antigravity`
-- Default model: `gemini-3.7-flash-high` for the Antigravity worker, `sonnet` for the Claude Code worker
+- Default model: `gemini-3.7-flash-high` for the Antigravity worker and `sonnet` for the Claude Code worker. Codex requires an explicit `model` on every task; choose from its maintained `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna` compatibility list. The CLI remains the final authority for account access.
 - Permission mode: `full` by default (`--dangerously-skip-permissions`, since there is no human available to answer a prompt in a headless session). Set `BRIDGE_PERMISSION_MODE=restricted` explicitly to require per-call approval instead.
 - Maximum concurrent jobs: `4`
 - Coding retries: `0`
@@ -110,6 +119,7 @@ Most users do not need these variables:
 - `BRIDGE_ANTIGRAVITY_MODEL` — exact default model slug for the Antigravity adapter
 - `BRIDGE_CLAUDE_CODE_PATH` — absolute path to `claude` when it is not on `PATH`
 - `BRIDGE_CLAUDE_CODE_MODEL` — exact default model slug for the Claude Code adapter (default `sonnet`)
+- `BRIDGE_CODEX_PATH` — absolute path to `codex`, or its npm `bin/codex.js` entry, when it is not on `PATH`
 - `BRIDGE_METRICS_FILE` — append one JSON line of usage metrics per finished job to this path
 - `BRIDGE_PRICING_FILE` — JSON price table merged over the built-in rates, so a rate change needs no release
 

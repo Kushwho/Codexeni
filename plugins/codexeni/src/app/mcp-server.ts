@@ -79,7 +79,7 @@ export function createMcpServer(runtime: BridgeRuntime, deps: McpServerDeps = {}
     task: z.string().min(1).max(100_000).describe("The bounded task for the worker: objective, allowed paths, required checks, and stop condition."),
     workspace: z.string().min(1).describe("Absolute path of the orchestrator's current workspace; in zero-config mode this exact canonical directory is the task boundary."),
     harness: z.string().min(1).max(100).optional().describe("Harness id from delegate_discover (for example \"antigravity\" or \"claude-code\"). Defaults to the configured default harness."),
-    model: z.string().min(1).max(200).optional().describe("Exact model slug as listed by delegate_discover. Defaults to the harness's default model."),
+    model: z.string().min(1).max(200).optional().describe("Exact model slug from delegate_discover. Required when harness is \"codex\" so the orchestrator records the chosen Codex model before launch; optional for other harnesses."),
     effort: z.enum(["low", "medium", "high"]).optional(),
     taskMode: z.enum(["coding", "read_only"]).optional().describe("read_only forbids workspace changes and allows bounded automatic retries; coding never retries."),
     maxRetries: z.number().int().min(0).max(LIMITS.readOnlyMaxRetries).optional(),
@@ -87,7 +87,7 @@ export function createMcpServer(runtime: BridgeRuntime, deps: McpServerDeps = {}
   };
 
   server.registerTool("delegate_discover", {
-    description: "List the local coding harnesses this bridge can delegate to, with install state, login state, and available models, plus the bridge's own limits. Reuses recent checks unless refresh is true. Reads no credentials.",
+    description: "List the local coding harnesses this bridge can delegate to, with install state, login state, and available models, plus the bridge's own limits. Codex reports a maintained static compatible model list because its CLI cannot enumerate account entitlements; select one of those names and pass it explicitly to delegate_start when using harness \"codex\". Reuses recent checks unless refresh is true. Reads no credentials.",
     inputSchema: {
       refresh: z.boolean().optional().describe("Force a fresh harness check instead of reusing the recent cached result."),
     },
@@ -95,7 +95,7 @@ export function createMcpServer(runtime: BridgeRuntime, deps: McpServerDeps = {}
   }, async ({ refresh }) => jsonResult({ ...(await runtime.discover({ refresh })), totals: runtime.getUsageTotals() }));
 
   server.registerTool("delegate_start", {
-    description: "Start an asynchronous bounded task on a local coding harness and return a jobId. Then call delegate_status once with waitSeconds set close to timeoutSeconds — that call stays open until the job is done, the same way Claude Code's own Agent tool waits for a subagent, so waiting for a result costs one tool call, never a shell sleep. In full permission mode the worker auto-approves its own tool use; the workspace check selects the working directory but is not a sandbox. Review every change before treating the task as done.",
+    description: "Start an asynchronous bounded task on a local coding harness and return a jobId. When harness is \"codex\", model is required: choose and pass an exact model name from delegate_discover before launch. Then call delegate_status once with waitSeconds set close to timeoutSeconds — that call stays open until the job is done, the same way Claude Code's own Agent tool waits for a subagent, so waiting for a result costs one tool call, never a shell sleep. In full permission mode the worker auto-approves its own tool use; the workspace check selects the working directory but is not a sandbox. Review every change before treating the task as done.",
     inputSchema: taskInput,
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
   }, async (input) => {

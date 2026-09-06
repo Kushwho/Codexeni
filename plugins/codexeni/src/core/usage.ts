@@ -26,7 +26,9 @@ export function normalizeUsage(raw: unknown): Usage | undefined {
   const cacheWriteTokens = asNumber(
     record.cache_creation_input_tokens ?? record.cache_write_tokens ?? record.cacheWriteTokens,
   );
-  const thinkingTokens = asNumber(record.thinking_tokens ?? record.thoughts_token_count ?? record.thinkingTokens);
+  const thinkingTokens = asNumber(
+    record.thinking_tokens ?? record.thoughts_token_count ?? record.thinkingTokens ?? record.reasoning_tokens ?? record.reasoningTokens ?? record.reasoning_output_tokens,
+  );
   const totalTokens = asNumber(record.total_tokens ?? record.totalTokens);
   const costUsd = asNumber(record.total_cost_usd ?? record.cost_usd ?? record.costUsd);
   if (inputTokens !== undefined) usage.inputTokens = inputTokens;
