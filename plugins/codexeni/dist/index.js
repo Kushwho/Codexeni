@@ -4,6 +4,10 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
+// src/core/types.ts
+var STANDARD_EFFORT_LEVELS = ["low", "medium", "high"];
+var EFFORT_LEVELS = [...STANDARD_EFFORT_LEVELS, "xhigh", "max"];
+
 // src/core/limits.ts
 var LIMITS = {
   /** Local ceiling on simultaneous jobs; BRIDGE_MAX_CONCURRENCY is clamped to this. */
@@ -1288,7 +1292,14 @@ var BridgeRuntime = class {
     const harnesses = {};
     for (const adapter of this.adapters.values()) {
       const probe = await this.discovery.get(adapter.id, options.refresh === true, () => this.runAdapterProbe(adapter));
-      harnesses[adapter.id] = { id: adapter.id, displayName: adapter.displayName, executable: adapter.executable, defaultModel: adapter.defaultModel, ...probe };
+      harnesses[adapter.id] = {
+        id: adapter.id,
+        displayName: adapter.displayName,
+        executable: adapter.executable,
+        defaultModel: adapter.defaultModel,
+        supportedEfforts: adapter.supportedEfforts,
+        ...probe
+      };
     }
     return {
       defaultHarness: this.config.defaultHarness,
@@ -1330,6 +1341,10 @@ var BridgeRuntime = class {
     if (input2.maxRetries !== void 0 && (!Number.isSafeInteger(input2.maxRetries) || input2.maxRetries < 0 || input2.maxRetries > LIMITS.readOnlyMaxRetries)) {
       throw new Error(`maxRetries must be an integer from 0 to ${LIMITS.readOnlyMaxRetries}.`);
     }
+    const effort = input2.effort ?? "high";
+    if (!adapter.supportedEfforts.includes(effort)) {
+      throw new Error(`effort "${effort}" is not supported by harness "${adapter.id}". Supported efforts: ${adapter.supportedEfforts.join(", ")}.`);
+    }
     const taskMode = input2.taskMode ?? "coding";
     if (taskMode !== "coding" && taskMode !== "read_only") throw new Error("taskMode must be either coding or read_only.");
     const selection = adapter.resolveSelection?.(input2.model, input2.effort) ?? {};
@@ -1351,7 +1366,7 @@ var BridgeRuntime = class {
       task: input2.task,
       workspace,
       model,
-      effort: input2.effort ?? "high",
+      effort,
       timeoutSeconds: Math.min(input2.timeoutSeconds ?? this.config.defaultTimeoutSeconds, this.config.defaultTimeoutSeconds),
       permissionMode: this.config.permissionMode,
       taskMode,
@@ -34794,7 +34809,7 @@ function createMcpServer(runtime, deps = {}) {
     workspace: external_exports.string().min(1).describe("Absolute path of the orchestrator's current workspace; in zero-config mode this exact canonical directory is the task boundary."),
     harness: external_exports.string().min(1).max(100).optional().describe('Harness id from delegate_discover (for example "antigravity" or "claude-code"). Defaults to the configured default harness.'),
     model: external_exports.string().min(1).max(200).optional().describe('Exact model slug from delegate_discover. Required when harness is "codex" so the orchestrator records the chosen Codex model before launch; optional for other harnesses.'),
-    effort: external_exports.enum(["low", "medium", "high"]).optional(),
+    effort: external_exports.enum(EFFORT_LEVELS).optional().describe("Reasoning effort supported by the selected harness; inspect its supportedEfforts field in delegate_discover before choosing."),
     taskMode: external_exports.enum(["coding", "read_only"]).optional().describe("read_only forbids workspace changes and allows bounded automatic retries; coding never retries."),
     maxRetries: external_exports.number().int().min(0).max(LIMITS.readOnlyMaxRetries).optional(),
     timeoutSeconds: external_exports.number().int().positive().max(runtime.config.defaultTimeoutSeconds).optional()
@@ -35037,6 +35052,7 @@ var AntigravityAdapter = class {
   executable;
   defaultModel;
   supportsContinuation = true;
+  supportedEfforts = STANDARD_EFFORT_LEVELS;
   constructor(settings = {}) {
     this.executable = settings.executable ?? ANTIGRAVITY_DEFAULTS.executable;
     this.defaultModel = settings.defaultModel ?? ANTIGRAVITY_DEFAULTS.model;
@@ -35191,6 +35207,7 @@ var ClaudeCodeAdapter = class {
   displayName = "Claude Code";
   executable;
   defaultModel;
+  supportedEfforts = STANDARD_EFFORT_LEVELS;
   constructor(settings = {}) {
     this.executable = settings.executable ?? CLAUDE_CODE_DEFAULTS.executable;
     this.defaultModel = settings.defaultModel ?? CLAUDE_CODE_DEFAULTS.model;
@@ -35333,6 +35350,7 @@ var CodexAdapter = class {
   defaultModel;
   requiresExplicitModel = true;
   supportsContinuation = true;
+  supportedEfforts = EFFORT_LEVELS;
   outputSchema = CODEX_WORKER_RESULT_SCHEMA;
   /** Prepended when a Windows npm installation is reached through its JS entry. */
   entryArgs;
@@ -35958,6 +35976,7 @@ export {
   DEFAULT_HARNESS,
   DEFAULT_TIMEOUT_SECONDS,
   DiscoveryCache,
+  EFFORT_LEVELS,
   LEGACY_HARNESS_ENV,
   LIMITS,
   METRICS_ENV,
@@ -35966,6 +35985,7 @@ export {
   NonceLedger,
   PRICE_EXPIRY,
   SENSITIVE_FIELD_NAME,
+  STANDARD_EFFORT_LEVELS,
   TaskLifecycle,
   TaskMetricsCollector,
   WorkspaceGuard,

@@ -26,6 +26,8 @@ test("the shipped bundle starts over stdio and serves the delegate tools", async
     tools.map((tool) => tool.name).sort(),
     ["delegate_cancel", "delegate_discover", "delegate_start", "delegate_status", "delegate_respond"].sort(),
   );
+  const startTool = tools.find((tool) => tool.name === "delegate_start");
+  assert.deepEqual(startTool.inputSchema.properties.effort.enum, ["low", "medium", "high", "xhigh", "max"]);
 
   const discovered = JSON.parse((await client.callTool({ name: "delegate_discover", arguments: {} })).content[0].text);
   // Full is the default; a bundle that shipped the old default would fail here.
@@ -38,6 +40,7 @@ test("the shipped bundle starts over stdio and serves the delegate tools", async
   for (const harness of Object.values(discovered.harnesses)) {
     assert.equal(typeof harness.installed, "boolean");
     assert.equal(typeof harness.supportsContinuation, "boolean");
+    assert.ok(Array.isArray(harness.supportedEfforts));
   }
 
   // Bad input must come back as a clean tool error, not a crashed server: a malformed id is

@@ -74,7 +74,7 @@ Use delegate_discover to see which harnesses are installed, then delegate a read
 
 ### Codex as a worker subagent
 
-Claude Code and Codex can both orchestrate the local Codex CLI. Name `codex` as the worker and explicitly select a model returned by `delegate_discover`; Codex does not provide a CLI command that can enumerate the models available to your account.
+Claude Code and Codex can both orchestrate the local Codex CLI. Name `codex` as the worker and explicitly select a model returned by `delegate_discover`; Codex does not provide a CLI command that can enumerate the models available to your account. Discovery also reports each harness's `supportedEfforts`; Codex supports `low`, `medium`, `high`, `xhigh`, and `max` for the maintained GPT-5.6 model list.
 
 ```text
 Use delegate_discover, then delegate a read-only review of src/auth.ts to codex with model gpt-5.6-luna. Do not edit files; report findings with file and line numbers.

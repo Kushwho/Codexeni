@@ -211,6 +211,7 @@ test("the MCP server exposes the five delegate tools and never asks the client f
   assert.deepEqual(discovered.humanInput.modes, ["mrtr", "legacy_elicitation_shim", "external"]);
   assert.equal(discovered.harnesses.antigravity.supportsContinuation, true);
   assert.equal(discovered.harnesses["claude-code"].supportsContinuation, false);
+  assert.deepEqual(discovered.harnesses.antigravity.supportedEfforts, ["low", "medium", "high"]);
   assert.equal(discovered.limits.maxInputRounds, bridge.LIMITS.maxInputRounds);
   assert.ok(!("sampling" in discovered), "the bridge must not advertise sampling");
   assert.ok(!("roots" in discovered), "the bridge must not advertise roots");
@@ -218,6 +219,16 @@ test("the MCP server exposes the five delegate tools and never asks the client f
   assert.equal(seen.roots, 0, "the bridge must never issue roots/list");
   assert.equal(seen.sampling, 0, "the bridge must never issue sampling/createMessage");
   await close();
+});
+
+test("runtime rejects an effort that the selected harness cannot honor", async () => {
+  const { root } = await makeWorkspace();
+  const runtime = makeRuntime(bridge, root);
+  await assert.rejects(
+    () => runtime.startTask({ task: "review", workspace: root, harness: "antigravity", effort: "xhigh" }),
+    { message: 'effort "xhigh" is not supported by harness "antigravity". Supported efforts: low, medium, high.' },
+  );
+  await runtime.shutdown();
 });
 
 test("delegate_status compacts echoed schemas unless full events are explicitly requested", async () => {

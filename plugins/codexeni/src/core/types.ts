@@ -9,7 +9,9 @@ import type { mkdtemp } from "node:fs/promises";
 export type PermissionMode = "restricted" | "full";
 export type JobStatus = "queued" | "running" | "awaiting_input" | "succeeded" | "failed" | "timed_out" | "canceled" | "orphaned";
 export type TaskMode = "coding" | "read_only";
-export type Effort = "low" | "medium" | "high";
+export const STANDARD_EFFORT_LEVELS = ["low", "medium", "high"] as const;
+export const EFFORT_LEVELS = [...STANDARD_EFFORT_LEVELS, "xhigh", "max"] as const;
+export type Effort = typeof EFFORT_LEVELS[number];
 export type ErrorCategory = "rate_limited" | "quota_exhausted" | "session_limit" | "context_limit" | "authentication" | "upstream_error";
 export type AllowedRootSource = "environment" | "task_workspace";
 /** What the harness itself reported about the run, independent of the process exit code. */

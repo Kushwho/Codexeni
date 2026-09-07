@@ -1,5 +1,5 @@
 import type { ToolCallObservation } from "../core/metrics.js";
-import type { Effort, HarnessSettings, Outcome, WorkerResult } from "../core/types.js";
+import { STANDARD_EFFORT_LEVELS, type Effort, type HarnessSettings, type Outcome, type WorkerResult } from "../core/types.js";
 import { normalizeUsage } from "../core/usage.js";
 import { isRecord } from "../core/value.js";
 import type { CommandRunner, HarnessAdapter, HarnessProbe, Interpretation, SpawnSpec, TaskLaunch } from "./adapter.js";
@@ -134,6 +134,7 @@ export class AntigravityAdapter implements HarnessAdapter {
   public readonly executable: string;
   public readonly defaultModel: string;
   public readonly supportsContinuation = true;
+  public readonly supportedEfforts = STANDARD_EFFORT_LEVELS;
 
   public constructor(settings: HarnessSettings = {}) {
     this.executable = settings.executable ?? ANTIGRAVITY_DEFAULTS.executable;
