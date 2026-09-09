@@ -10,6 +10,10 @@ plugins/codexeni/logs/
 *.agy.log
 .tmp/
 
+# Mutation testing: Stryker sandboxes and generated reports
+plugins/codexeni/.stryker-tmp/
+plugins/codexeni/reports/
+
 # Local editor and OS noise
 .DS_Store
 Thumbs.db

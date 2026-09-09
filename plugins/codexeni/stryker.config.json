@@ -1,0 +1,14 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "testRunner": "command",
+  "commandRunner": {
+    "command": "node scripts/stryker-command.mjs"
+  },
+  "mutate": ["src/core/**/*.ts"],
+  "coverageAnalysis": "off",
+  "timeoutMS": 30000,
+  "dryRunTimeoutMinutes": 1,
+  "timeoutFactor": 1.5,
+  "reporters": ["clear-text", "html", "json"],
+  "tempDirName": ".stryker-tmp"
+}
