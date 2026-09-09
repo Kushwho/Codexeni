@@ -1,6 +1,12 @@
 {
   "version": 1,
   "skills": {
+    "mutation-testing": {
+      "source": "aj-geddes/useful-ai-prompts",
+      "sourceType": "github",
+      "skillPath": "skills/mutation-testing/SKILL.md",
+      "computedHash": "5076e8ce70361bad3588ef90b311debf0ac0cec735bc9f0751dcb4817032df82"
+    },
     "simplify": {
       "source": "brianlovin/agent-config",
       "sourceType": "github",

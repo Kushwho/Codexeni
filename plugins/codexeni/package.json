@@ -15,6 +15,8 @@
     "inspect": "pnpm build && npx @modelcontextprotocol/inspector --config inspector.json --server codexeni",
     "inspect:cli": "pnpm build && npx @modelcontextprotocol/inspector --cli --config inspector.json --server codexeni",
     "lint": "eslint src",
+    "mutation": "stryker run --mutate \"src/**/*.ts\" \"!src/index.ts\"",
+    "mutation:pilot": "stryker run",
     "start": "node dist/index.js",
     "test": "pnpm build && node --test --test-concurrency=1 test/runtime.test.mjs test/interactive.test.mjs test/claude-code.test.mjs test/codex.test.mjs test/adapters.test.mjs test/bundle.test.mjs",
     "test:fixture": "node --test fixtures/clamp/test/clamp.test.mjs",
@@ -27,6 +29,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@stryker-mutator/core": "^10.0.0",
     "@types/node": "^22.15.3",
     "esbuild": "^0.25.9",
     "eslint": "^10.10.0",
