@@ -131,6 +131,7 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
     return { command: this.executable, args, cwd: input.workspace, stdin: input.prompt };
   }
 
+  // eslint-disable-next-line complexity -- pre-existing debt, see eslint.config.js
   public interpret(event: Record<string, unknown>): Interpretation {
     const interpretation: Interpretation = {};
     if (typeof event.session_id === "string") interpretation.sessionId = event.session_id;

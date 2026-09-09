@@ -11,12 +11,12 @@ export async function stopChildProcess(child: ChildProcess): Promise<void> {
   if (process.platform === "win32") {
     await new Promise<void>((done) => {
       const killer = nodeSpawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore", windowsHide: true, shell: false });
-      killer.once("error", () => { try { child.kill("SIGTERM"); } catch { /* best effort */ } done(); });
+      killer.once("error", () => { try { child.kill("SIGTERM"); } catch { /* best effort */ } done(); }); // nosemgrep: codexeni.no-discarded-catch-error -- best-effort kill fallback; nothing to do if the child is already gone
       killer.once("close", () => done());
     });
     return;
   }
-  try { process.kill(-child.pid, "SIGTERM"); } catch { try { child.kill("SIGTERM"); } catch { /* best effort */ } }
+  try { process.kill(-child.pid, "SIGTERM"); } catch { try { child.kill("SIGTERM"); } catch { /* best effort */ } } // nosemgrep: codexeni.no-discarded-catch-error -- best-effort kill fallbacks; the process exiting is the goal, not the error
 }
 
 /** Run a short harness probe without giving adapters direct process ownership. */

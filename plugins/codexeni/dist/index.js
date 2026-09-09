@@ -255,17 +255,17 @@ function defaultRetryAfterMs(context, nowMs) {
   const milliseconds = /retry(?:-|_)?after(?:_ms|\s*ms)\s*[:=]?\s*(\d+(?:\.\d+)?)/i.exec(text);
   if (milliseconds) return Math.max(0, Math.round(Number(milliseconds[1])));
   const retryDate = /retry(?:-|_)?after\s*[:=]\s*["']?(\d{4}-\d\d-\d\dT[^"'\s,}]+)/i.exec(text);
-  if (retryDate) {
+  if (retryDate?.[1] !== void 0) {
     const retryTime = Date.parse(retryDate[1]);
     if (Number.isFinite(retryTime)) return Math.max(0, retryTime - nowMs);
   }
   const httpDate = /retry(?:-|_)?after\s*:\s*([^\r\n]+)/i.exec(text);
-  if (httpDate) {
+  if (httpDate?.[1] !== void 0) {
     const retryTime = Date.parse(httpDate[1].trim().replace(/^['"]|['"]$/g, ""));
     if (Number.isFinite(retryTime)) return Math.max(0, retryTime - nowMs);
   }
   const reset = /(?:reset(?:[_ -]?at)?|retry[_ -]?at|blocked[_ -]?until)\s*[:=]?\s*["']?([^"'\s,}]+)/i.exec(text);
-  if (reset) {
+  if (reset?.[1] !== void 0) {
     const resetTime = Date.parse(reset[1]);
     if (Number.isFinite(resetTime)) return Math.max(0, resetTime - nowMs);
   }
@@ -334,7 +334,9 @@ function resolveHarnessSettings(env = process.env) {
   };
   for (const [name, value] of Object.entries(env)) {
     const match = HARNESS_ENV_PATTERN.exec(name);
-    if (match) assign(match[1].toLowerCase().replace(/_/g, "-"), match[2] === "PATH" ? "executable" : "defaultModel", nonEmpty(value));
+    if (match?.[1] !== void 0 && match?.[2] !== void 0) {
+      assign(match[1].toLowerCase().replace(/_/g, "-"), match[2] === "PATH" ? "executable" : "defaultModel", nonEmpty(value));
+    }
   }
   for (const legacy of LEGACY_HARNESS_ENV) assign(legacy.harness, legacy.setting, nonEmpty(env[legacy.name]));
   return harnesses;
@@ -846,6 +848,7 @@ var TaskLifecycle = class {
   constructor(dependencies) {
     this.dependencies = dependencies;
   }
+  // eslint-disable-next-line max-lines-per-function -- pre-existing debt, see eslint.config.js
   launch(record2, continuationPrompt) {
     const adapter = this.dependencies.getAdapter(record2.harness);
     let outputSchemaPath;
@@ -943,6 +946,7 @@ ${sanitized}`);
       if (!stderr && pending) this.recordEvent(record2, pending);
     });
   }
+  // eslint-disable-next-line complexity -- pre-existing debt, see eslint.config.js
   recordEvent(record2, line) {
     const event = parseJsonLine(line, this.dependencies.now().toISOString());
     if (!event) return;
@@ -1031,6 +1035,7 @@ ${sanitized}`);
   async cancelAwaitingInput(record2) {
     await this.finalize(record2, "canceled");
   }
+  // eslint-disable-next-line complexity -- pre-existing debt, see eslint.config.js
   async finalize(record2, status, detail) {
     if (record2.finalizing || TERMINAL_STATUSES.includes(record2.status)) return;
     record2.finalizing = true;
@@ -1226,6 +1231,7 @@ var BridgeRuntime = class {
   priceTable;
   /** Per-job temp directories this instance created via `mkdtempImpl`, removed on `shutdown()`. */
   tempDirs = /* @__PURE__ */ new Set();
+  // eslint-disable-next-line complexity -- pre-existing debt, see eslint.config.js
   constructor(dependencies = {}, metricsOptions = {}) {
     const provided = dependencies.config ?? resolveBridgeConfig();
     this.config = {
@@ -1328,6 +1334,7 @@ var BridgeRuntime = class {
       }]))
     };
   }
+  // eslint-disable-next-line complexity, max-lines-per-function -- pre-existing debt, see eslint.config.js
   async startTask(input2) {
     const adapter = this.getAdapter(input2.harness ?? this.config.defaultHarness);
     if (!input2.task.trim()) throw new Error("Task must not be empty.");
@@ -34870,6 +34877,7 @@ function createMcpServer(runtime, deps = {}) {
       answeredBy: external_exports.enum(["orchestrator", "human"]).optional()
     }),
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true }
+    // eslint-disable-next-line complexity -- pre-existing debt, see eslint.config.js
   }, async ({ jobId, action, answer, instruction, answeredBy }, ctx) => {
     if (action === "answer") {
       if (!answer) return jsonResult({ error: 'answer is required for action "answer".' }, true);
@@ -35108,6 +35116,7 @@ var AntigravityAdapter = class {
     args.push("--prompt", input2.prompt);
     return { command: this.executable, args, cwd: input2.workspace };
   }
+  // eslint-disable-next-line complexity -- pre-existing debt, see eslint.config.js
   interpret(event) {
     const interpretation = {};
     const stepObservation = stepUpdateObservation(event);
@@ -35253,6 +35262,7 @@ var ClaudeCodeAdapter = class {
     }
     return { command: this.executable, args, cwd: input2.workspace, stdin: input2.prompt };
   }
+  // eslint-disable-next-line complexity -- pre-existing debt, see eslint.config.js
   interpret(event) {
     const interpretation = {};
     if (typeof event.session_id === "string") interpretation.sessionId = event.session_id;
@@ -35406,6 +35416,7 @@ var CodexAdapter = class {
     args.push("-");
     return { command: this.executable, args, cwd: input2.workspace, stdin: input2.prompt };
   }
+  // eslint-disable-next-line complexity -- pre-existing debt, see eslint.config.js
   interpret(event) {
     const interpretation = {};
     if (event.type === "thread.started" && typeof event.thread_id === "string") interpretation.sessionId = event.thread_id;

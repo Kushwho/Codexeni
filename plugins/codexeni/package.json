@@ -9,12 +9,14 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit && esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/index.js --sourcemap",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
     "bump": "node scripts/bump-version.mjs",
+    "check:cycles": "madge --circular --extensions ts src/",
     "check:manifests": "node scripts/bump-version.mjs --check",
+    "lint": "eslint src",
+    "start": "node dist/index.js",
     "test": "pnpm build && node --test --test-concurrency=1 test/runtime.test.mjs test/interactive.test.mjs test/claude-code.test.mjs test/codex.test.mjs test/adapters.test.mjs test/bundle.test.mjs",
     "test:fixture": "node --test fixtures/clamp/test/clamp.test.mjs",
-    "start": "node dist/index.js"
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.22.0",
@@ -22,8 +24,13 @@
     "zod": "^4.5.4"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^22.15.3",
     "esbuild": "^0.25.9",
-    "typescript": "^5.8.3"
+    "eslint": "^10.10.0",
+    "eslint-plugin-import": "^2.32.0",
+    "madge": "^8.0.0",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.70.0"
   }
 }

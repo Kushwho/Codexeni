@@ -13,6 +13,7 @@ function asNumber(value: unknown): number | undefined {
  * Map the token-count names used by common harnesses onto one shape. Unknown
  * fields are dropped; the raw event is still retained in the job's event tail.
  */
+// eslint-disable-next-line complexity -- pre-existing debt, see eslint.config.js
 export function normalizeUsage(raw: unknown): Usage | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const record = raw as Record<string, unknown>;

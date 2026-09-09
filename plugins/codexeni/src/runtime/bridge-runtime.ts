@@ -72,6 +72,7 @@ export class BridgeRuntime {
   /** Per-job temp directories this instance created via `mkdtempImpl`, removed on `shutdown()`. */
   private readonly tempDirs = new Set<string>();
 
+  // eslint-disable-next-line complexity -- pre-existing debt, see eslint.config.js
   public constructor(dependencies: RuntimeDependencies = {}, metricsOptions: BridgeRuntimeMetricsOptions = {}) {
     const provided = dependencies.config ?? resolveBridgeConfig();
     this.config = {
@@ -177,6 +178,7 @@ export class BridgeRuntime {
     };
   }
 
+  // eslint-disable-next-line complexity, max-lines-per-function -- pre-existing debt, see eslint.config.js
   public async startTask(input: StartTaskInput): Promise<Record<string, unknown>> {
     const adapter = this.getAdapter(input.harness ?? this.config.defaultHarness);
     if (!input.task.trim()) throw new Error("Task must not be empty.");
@@ -392,7 +394,7 @@ export class BridgeRuntime {
     }));
     // Only directories this instance itself created via mkdtempImpl are ever removed.
     await Promise.all([...this.tempDirs].map(async (dir) => {
-      try { await rm(dir, { recursive: true, force: true }); }
+      try { await rm(dir, { recursive: true, force: true }); } // nosemgrep: codexeni.no-discarded-catch-error -- temp-dir cleanup must never block shutdown
       catch { /* best-effort: a locked or already-missing directory must not block shutdown */ }
     }));
     this.tempDirs.clear();

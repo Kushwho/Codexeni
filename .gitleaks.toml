@@ -1,0 +1,17 @@
+# Gitleaks configuration for the Codexeni bridge.
+#
+# The default rule set is extended, not replaced. Synthetic credentials in tests and
+# fixtures are allowlisted by path: they exist to exercise redaction and failure
+# classification, are committed on purpose, and have never been valid. Real secrets
+# must not be committed anywhere — SECURITY.md "safe use".
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic test/fixture credentials and documentation examples"
+paths = [
+  '''(^|/)fixtures/''',
+  '''(^|/)test/.*\.(ts|mjs|md)$''',
+  '''(^|/)docs/''',
+]

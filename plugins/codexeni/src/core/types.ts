@@ -3,7 +3,6 @@
  * workspace utilities, and MCP server. Nothing here names a specific harness.
  */
 import type { ChildProcess, SpawnOptions } from "node:child_process";
-import type { ToolCallObservation } from "./metrics.js";
 import type { mkdtemp } from "node:fs/promises";
 
 export type PermissionMode = "restricted" | "full";
@@ -115,6 +114,16 @@ export interface CircuitBreaker {
   category: "rate_limited" | "quota_exhausted";
   openedAt: string;
   blockedUntil: string;
+}
+
+/** One tool invocation observed in a worker's output stream. */
+export interface ToolCallObservation {
+  name: string;
+  phase: "started" | "completed";
+  /** Whether the call succeeded. Only meaningful when phase is "completed". */
+  ok?: boolean;
+  /** Correlates a "started" with its "completed" when the harness supplies an id. */
+  id?: string;
 }
 
 /** A bounded clarification requested by an interactive-capable worker. */

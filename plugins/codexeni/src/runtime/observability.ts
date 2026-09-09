@@ -17,7 +17,7 @@ export interface MetricsSink {
  */
 export function dispatchToSinks(sinks: readonly MetricsSink[], metrics: TaskMetrics): void {
   for (const sink of sinks) {
-    try {
+    try { // nosemgrep: codexeni.no-discarded-catch-error -- sink isolation is dispatchToSinks' contract; a throwing sink must not fail the job
       sink.onTaskFinalized(metrics);
     } catch {
       // A misbehaving sink is the sink's problem, never the job's.

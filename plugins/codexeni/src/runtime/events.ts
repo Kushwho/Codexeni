@@ -49,6 +49,7 @@ function compactText(value: unknown): string | undefined {
   return value.length > COMPACT_EVENT_TEXT_CHARS ? `${value.slice(0, COMPACT_EVENT_TEXT_CHARS)}…` : value;
 }
 
+// eslint-disable-next-line complexity -- pre-existing debt, see eslint.config.js
 function compactEvent(event: StreamEvent): Record<string, unknown> {
   const compact: Record<string, unknown> = { timestamp: event.timestamp, type: event.type };
   if (!isRecord(event.data)) {
