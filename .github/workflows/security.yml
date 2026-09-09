@@ -1,0 +1,81 @@
+name: Security
+
+# Deliberately separate from ci.yml: these gates touch nothing the build/test pipeline
+# depends on, so a security finding never blocks discovering whether the code compiles
+# (and vice versa).
+on:
+  push:
+    paths:
+      - "plugins/codexeni/**"
+      - ".semgrep/**"
+      - ".semgrepignore"
+      - ".gitleaks.toml"
+      - ".github/workflows/security.yml"
+  # Branch protection requires these jobs, so every PR must schedule them.
+  pull_request: {}
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    name: Gitleaks (committed secrets)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        # actions/checkout v4 — full history so gitleaks can scan every commit.
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+
+      - name: Scan git history for secrets
+        # gitleaks/gitleaks-action v2 — free for public repositories.
+        uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          # Pin the scanner binary too, not just the action wrapper. No leading "v":
+          # the action builds the URL as gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz
+          # under the v-prefixed tag, so "v8.30.1" here resolves to a 404 on vv8.30.1.
+          GITLEAKS_VERSION: 8.30.1
+
+  audit:
+    name: pnpm audit (vulnerable dependencies)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        # actions/checkout v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Set up pnpm
+        # pnpm/action-setup v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 10
+
+      # Audit reads pnpm-lock.yaml; no install needed.
+      - name: Audit dependencies
+        run: pnpm audit --audit-level=high
+        working-directory: plugins/codexeni
+
+  semgrep:
+    name: Semgrep (SECURITY.md gates)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        # actions/checkout v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      # Run the digest-pinned scanner image directly rather than through an action:
+      # the rules in .semgrep/ encode SECURITY.md policies (no shell spawns from task
+      # text, workspace guard enforcement, redaction before logging, no discarded
+      # errors) and p/default adds the community baseline.
+      - name: Scan with Semgrep
+        run: |
+          docker run --rm \
+            -v "$PWD:/src:ro" \
+            -e SEMGREP_SEND_METRICS=off \
+            returntocorp/semgrep@sha256:51c9f53a4fce0d55e9abd08d7b96968654248a4b1122e77f20e0a49c0072446c \
+            sh -c "cd /src && semgrep scan --config p/default --config .semgrep/ --error"

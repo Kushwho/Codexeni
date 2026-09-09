@@ -25,7 +25,7 @@ export function parseModelList(output: string): string[] {
   const slugs = new Set<string>();
   const trimmed = output.trim();
   if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
-    try {
+    try { // nosemgrep: codexeni.no-discarded-catch-error -- JSON-parse probe; falling through to the line parser below is the handler
       const collect = (value: unknown): void => {
         if (typeof value === "string") { if (MODEL_SLUG.test(value)) slugs.add(value.toLowerCase()); return; }
         if (Array.isArray(value)) { value.forEach(collect); return; }
@@ -110,6 +110,7 @@ function parseWorkerResult(value: unknown): WorkerResult | undefined {
  * Reads one tool step out of an `agy` stream event: labelled `event` (not `type`), nested
  * under `step_update`. Each tool emits ACTIVE then DONE/ERROR sharing one `step_index`, read only at the top level so each pair counts once.
  */
+// eslint-disable-next-line complexity -- pre-existing debt, see eslint.config.js
 function stepUpdateObservation(event: Record<string, unknown>): ToolCallObservation | undefined {
   if (event.event !== "step_update" && event.type !== "step_update") return undefined;
   const step = isRecord(event.step_update) ? event.step_update : undefined;
@@ -191,6 +192,7 @@ export class AntigravityAdapter implements HarnessAdapter {
     return { command: this.executable, args, cwd: input.workspace };
   }
 
+  // eslint-disable-next-line complexity -- pre-existing debt, see eslint.config.js
   public interpret(event: Record<string, unknown>): Interpretation {
     const interpretation: Interpretation = {};
     const stepObservation = stepUpdateObservation(event);

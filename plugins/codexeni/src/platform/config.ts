@@ -71,7 +71,9 @@ export function resolveHarnessSettings(env: NodeJS.ProcessEnv = process.env): Re
   };
   for (const [name, value] of Object.entries(env)) {
     const match = HARNESS_ENV_PATTERN.exec(name);
-    if (match) assign(match[1].toLowerCase().replace(/_/g, "-"), match[2] === "PATH" ? "executable" : "defaultModel", nonEmpty(value));
+    if (match?.[1] !== undefined && match?.[2] !== undefined) {
+      assign(match[1].toLowerCase().replace(/_/g, "-"), match[2] === "PATH" ? "executable" : "defaultModel", nonEmpty(value));
+    }
   }
   for (const legacy of LEGACY_HARNESS_ENV) assign(legacy.harness, legacy.setting, nonEmpty(env[legacy.name]));
   return harnesses;

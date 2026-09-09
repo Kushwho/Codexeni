@@ -64,6 +64,7 @@ export interface McpServerDeps {
   nonces?: NonceLedger;
 }
 
+// eslint-disable-next-line max-lines-per-function -- pre-existing debt, see eslint.config.js
 export function createMcpServer(runtime: BridgeRuntime, deps: McpServerDeps = {}): McpServer {
   // requestState is signed per-process: one stdio process must serve every round of a flow it starts.
   const codec = deps.codec ?? createRequestStateCodec<SealedInputState>({
@@ -136,6 +137,7 @@ export function createMcpServer(runtime: BridgeRuntime, deps: McpServerDeps = {}
       answeredBy: z.enum(["orchestrator", "human"]).optional(),
     }),
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    // eslint-disable-next-line complexity -- pre-existing debt, see eslint.config.js
   }, async ({ jobId, action, answer, instruction, answeredBy }, ctx) => {
     if (action === "answer") {
       if (!answer) return jsonResult({ error: "answer is required for action \"answer\"." }, true);

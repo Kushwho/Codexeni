@@ -4,15 +4,8 @@
  */
 import type { ErrorCategory, JobStatus, Outcome, TaskMode, Usage } from "./types.js";
 
-/** One tool invocation observed in a worker's output stream. */
-export interface ToolCallObservation {
-  name: string;
-  phase: "started" | "completed";
-  /** Whether the call succeeded. Only meaningful when phase is "completed". */
-  ok?: boolean;
-  /** Correlates a "started" with its "completed" when the harness supplies an id. */
-  id?: string;
-}
+/** Defined in types.ts (with the rest of the shared vocabulary) to keep the module graph acyclic; re-exported here so existing import paths keep working. */
+export type { ToolCallObservation } from "./types.js";
 
 /** Tool activity for one job, rolled up. */
 export interface ToolCallStats {

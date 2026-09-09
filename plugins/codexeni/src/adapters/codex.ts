@@ -33,6 +33,7 @@ export const CODEX_WORKER_RESULT_SCHEMA = {
   },
 } as const;
 
+// eslint-disable-next-line complexity -- pre-existing debt, see eslint.config.js
 function parseWorkerResult(value: unknown): WorkerResult | undefined {
   let candidate = value;
   if (typeof candidate === "string") {
@@ -137,6 +138,7 @@ export class CodexAdapter implements HarnessAdapter {
     return { command: this.executable, args, cwd: input.workspace, stdin: input.prompt };
   }
 
+  // eslint-disable-next-line complexity -- pre-existing debt, see eslint.config.js
   public interpret(event: Record<string, unknown>): Interpretation {
     const interpretation: Interpretation = {};
     if (event.type === "thread.started" && typeof event.thread_id === "string") interpretation.sessionId = event.thread_id;

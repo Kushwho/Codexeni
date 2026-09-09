@@ -1,0 +1,162 @@
+# Custom Semgrep rules: SECURITY.md policies that nothing else enforces.
+#
+# Each rule was verified two ways before landing: it fires on a hand-written bad
+# example, and it passes on the tree as of the rule's addition. When touching the
+# code these rules cover, re-run:
+#   semgrep scan --config p/default --config .semgrep/ --error
+rules:
+  # SECURITY.md safe-use: task prompts are untrusted input, and the adapters build
+  # worker command lines from task text. Every spawn in this repo is argv-array with
+  # shell:false; this rule keeps it that way. Regex `.exec()` is a method call and
+  # does not match the bare `exec(...)` patterns.
+  - id: codexeni.no-shell-spawn
+    message: >
+      A shell-interpreting process spawn (shell: true, or string-form exec/execSync)
+      lets task text or harness output become shell commands. Build an argv array and
+      use spawn(..., { shell: false }) instead, like every adapter in this repo.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      category: security
+      technology: [nodejs]
+      cwe: "CWE-78: Improper Neutralization of Special Elements used in an OS Command"
+      references: ["SECURITY.md"]
+    pattern-either:
+      - pattern: 'spawn($CMD, $ARGS, { ..., shell: true, ... })'
+      - pattern: 'spawnSync($CMD, $ARGS, { ..., shell: true, ... })'
+      - pattern: '$OBJ.spawn($CMD, $ARGS, { ..., shell: true, ... })'
+      - pattern: '$OBJ.spawnSync($CMD, $ARGS, { ..., shell: true, ... })'
+      - pattern: exec($CMD, ...)
+      - pattern: execSync($CMD, ...)
+
+  # SECURITY.md safe-use: only the task workspace and BRIDGE_ALLOWED_ROOTS are valid
+  # filesystem boundaries, and both are enforced by the guard in
+  # src/platform/workspace.ts. Task-supplied `workspace` strings (MCP tool input,
+  # task records) must go through WorkspaceGuard.assertAllowed() or
+  # canonicalizeWorkspace() before touching the filesystem. Taint is tracked within
+  # a function; the rule catches a workspace string used directly or via one local.
+  - id: codexeni.fs-path-through-workspace-guard
+    message: >
+      A task-supplied workspace path reaches a filesystem call without passing through
+      the workspace guard (src/platform/workspace.ts). Route it through
+      WorkspaceGuard.assertAllowed() or canonicalizeWorkspace() first, so
+      BRIDGE_ALLOWED_ROOTS is enforced and the path is realpath-canonicalized.
+    severity: ERROR
+    languages: [typescript, javascript]
+    mode: taint
+    metadata:
+      category: security
+      technology: [nodejs]
+      cwe: "CWE-22: Improper Limitation of a Pathname to a Restricted Directory"
+      references: ["SECURITY.md"]
+    pattern-sources:
+      - pattern: $X.workspace
+    pattern-sinks:
+      - patterns:
+          - focus-metavariable: $PATH
+          - pattern-either:
+              # Named imports — the style every fs user in this repo uses.
+              - pattern-either:
+                  - pattern: readFileSync($PATH, ...)
+                  - pattern: readFile($PATH, ...)
+                  - pattern: writeFileSync($PATH, ...)
+                  - pattern: writeFile($PATH, ...)
+                  - pattern: appendFile($PATH, ...)
+                  - pattern: appendFileSync($PATH, ...)
+                  - pattern: readdir($PATH, ...)
+                  - pattern: readdirSync($PATH, ...)
+                  - pattern: stat($PATH, ...)
+                  - pattern: statSync($PATH, ...)
+                  - pattern: rm($PATH, ...)
+                  - pattern: rmSync($PATH, ...)
+                  - pattern: unlink($PATH, ...)
+                  - pattern: unlinkSync($PATH, ...)
+                  - pattern: realpath($PATH, ...)
+                  - pattern: mkdir($PATH, ...)
+                  - pattern: mkdirSync($PATH, ...)
+                  - pattern: access($PATH, ...)
+                  - pattern: open($PATH, ...)
+              # Namespace access (import * as fs from "node:fs").
+              - patterns:
+                  - pattern: $FS.$FN($PATH, ...)
+                  - metavariable-regex:
+                      metavariable: $FN
+                      regex: ^(readFile|readFileSync|writeFile|writeFileSync|appendFile|appendFileSync|readdir|readdirSync|stat|statSync|rm|rmSync|unlink|unlinkSync|realpath|realpathSync|mkdir|mkdirSync|access|accessSync|open|openSync)$
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: assertAllowed(...)
+          - pattern: $GUARD.assertAllowed(...)
+          - pattern: canonicalizeWorkspace(...)
+          - pattern: isPathWithinRoot(...)
+    paths:
+      exclude:
+        # The guard module itself touches raw workspace paths by construction.
+        - "**/platform/workspace.ts"
+
+  # SECURITY.md safe-use: never include account identifiers, tokens, or raw harness
+  # output in logs. Worker output is untrusted and carries labeled secrets that only
+  # redactPotentialSecrets() strips; the one allowed logging site (config.ts) logs
+  # neither. This rule is skipped for core/redaction.ts, whose job is handling secrets.
+  - id: codexeni.no-unredacted-logging
+    message: >
+      Logging raw harness output (stdout/stderr/event data) or account identifiers
+      can leak OAuth state and secrets that only redactPotentialSecrets() strips.
+      Log redacted values or non-sensitive operational detail instead.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      category: security
+      technology: [nodejs]
+      cwe: "CWE-532: Insertion of Sensitive Information into Log File"
+      references: ["SECURITY.md"]
+    paths:
+      exclude:
+        - "**/core/redaction.ts"
+    patterns:
+      - pattern-either:
+          # Raw worker output reaching console as its own argument.
+          - patterns:
+              - pattern: console.$M(..., $X.$FIELD, ...)
+              - metavariable-regex:
+                  metavariable: $FIELD
+                  regex: ^(stdout|stderr|data|events)$
+          # ...or interpolated into a logged template literal.
+          - patterns:
+              - pattern: console.$M(`...${$X.$FIELD}...`)
+              - metavariable-regex:
+                  metavariable: $FIELD
+                  regex: ^(stdout|stderr|data|events)$
+          # Account/credential vocabulary in any logged message. Regex over source, so
+          # it also catches keywords inside template literals and concatenation.
+          - pattern-regex: console\.\w+\([^;]*\b(account|email|credential|password|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)\b[^;]*\)
+
+  # SECURITY.md treats worker failures as security-relevant signals (failure
+  # classification drives retry, circuit breaking, and what reaches the orchestrator).
+  # A catch whose body is empty or comment-only throws that signal away — comments are
+  # invisible to the AST, so an explained ignore and a silent one look identical.
+  # This flags bound and binding-less catches alike (semgrep matches `catch { }` with
+  # `catch ($ERR) { }`); the repo's five deliberate best-effort catches carry
+  # `// nosemgrep: codexeni.no-discarded-catch-error -- reason` waivers so every
+  # deliberate ignore is machine-tracked. A catch that returns a fallback or uses the
+  # error (this repo's JSON-parse idiom) is a handler and passes. (Semgrep OSS cannot
+  # express "bound but never referenced" — metavariables do not unify into pattern-not
+  # — so the enforceable core is the untouched-body catch.)
+  - id: codexeni.no-discarded-catch-error
+    message: >
+      This catch block's body is empty, discarding the failure signal. Use the error
+      (finalize, annotate, redact-and-log), return the fallback you intend, or mark
+      the deliberate ignore with a nosemgrep waiver naming the reason.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      category: security
+      technology: [nodejs]
+      cwe: "CWE-754: Improper Check for Unusual or Exceptional Conditions"
+      references: ["SECURITY.md"]
+    pattern-either:
+      - pattern: |
+          try { ... }
+          catch ($ERR) { }
+      - pattern: |
+          try { ... }
+          catch ($ERR) { /**/ }

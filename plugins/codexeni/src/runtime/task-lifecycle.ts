@@ -38,6 +38,7 @@ export interface TaskLifecycleDependencies {
 export class TaskLifecycle {
   public constructor(private readonly dependencies: TaskLifecycleDependencies) {}
 
+  // eslint-disable-next-line max-lines-per-function -- pre-existing debt, see eslint.config.js
   public launch(record: TaskRecord, continuationPrompt?: string): void {
     const adapter = this.dependencies.getAdapter(record.harness);
     let outputSchemaPath: string | undefined;
@@ -137,6 +138,7 @@ export class TaskLifecycle {
     stream.on("end", () => { if (!stderr && pending) this.recordEvent(record, pending); });
   }
 
+  // eslint-disable-next-line complexity -- pre-existing debt, see eslint.config.js
   private recordEvent(record: TaskRecord, line: string): void {
     const event = parseJsonLine(line, this.dependencies.now().toISOString());
     if (!event) return;
@@ -230,6 +232,7 @@ export class TaskLifecycle {
     await this.finalize(record, "canceled");
   }
 
+  // eslint-disable-next-line complexity -- pre-existing debt, see eslint.config.js
   private async finalize(record: TaskRecord, status: JobStatus, detail?: string): Promise<void> {
     if (record.finalizing || TERMINAL_STATUSES.includes(record.status)) return;
     record.finalizing = true;

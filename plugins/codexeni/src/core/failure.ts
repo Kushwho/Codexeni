@@ -21,6 +21,7 @@ export function defaultClassifyFailure(context: unknown): ErrorCategory | undefi
 
 /** Returns a provider-directed wait in milliseconds when present, including reset timestamps. */
 export function defaultRetryAfterMs(context: unknown, nowMs: number): number | undefined {
+  // eslint-disable-next-line complexity -- pre-existing debt, see eslint.config.js
   const fromStructuredValue = (candidate: unknown, depth = 0): number | undefined => {
     if (!candidate || typeof candidate !== "object" || depth > 8) return undefined;
     for (const [key, item] of Object.entries(candidate as Record<string, unknown>)) {
@@ -52,17 +53,17 @@ export function defaultRetryAfterMs(context: unknown, nowMs: number): number | u
   const milliseconds = /retry(?:-|_)?after(?:_ms|\s*ms)\s*[:=]?\s*(\d+(?:\.\d+)?)/i.exec(text);
   if (milliseconds) return Math.max(0, Math.round(Number(milliseconds[1])));
   const retryDate = /retry(?:-|_)?after\s*[:=]\s*["']?(\d{4}-\d\d-\d\dT[^"'\s,}]+)/i.exec(text);
-  if (retryDate) {
+  if (retryDate?.[1] !== undefined) {
     const retryTime = Date.parse(retryDate[1]);
     if (Number.isFinite(retryTime)) return Math.max(0, retryTime - nowMs);
   }
   const httpDate = /retry(?:-|_)?after\s*:\s*([^\r\n]+)/i.exec(text);
-  if (httpDate) {
+  if (httpDate?.[1] !== undefined) {
     const retryTime = Date.parse(httpDate[1].trim().replace(/^['"]|['"]$/g, ""));
     if (Number.isFinite(retryTime)) return Math.max(0, retryTime - nowMs);
   }
   const reset = /(?:reset(?:[_ -]?at)?|retry[_ -]?at|blocked[_ -]?until)\s*[:=]?\s*["']?([^"'\s,}]+)/i.exec(text);
-  if (reset) {
+  if (reset?.[1] !== undefined) {
     const resetTime = Date.parse(reset[1]);
     if (Number.isFinite(resetTime)) return Math.max(0, resetTime - nowMs);
   }

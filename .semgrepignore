@@ -1,0 +1,10 @@
+# Semgrep scan targets: the shipped plugin source, not generated or local-only trees.
+# This file replaces semgrep's default ignore list, so the usual generated-code
+# entries are restated here. `evals/` is a local experiment harness that is not
+# part of the committed tree CI scans; ignoring it keeps local runs identical.
+.github/
+.git/
+dist/
+node_modules/
+evals/
+vendor/

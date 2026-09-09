@@ -53,6 +53,12 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      - name: Lint
+        run: pnpm lint
+
+      - name: Check import cycles
+        run: pnpm check:cycles
+
       - name: Runtime tests
         run: pnpm test
 
