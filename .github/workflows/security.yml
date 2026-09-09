@@ -34,8 +34,10 @@ jobs:
         uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          # Pin the scanner binary too, not just the action wrapper.
-          GITLEAKS_VERSION: v8.30.1
+          # Pin the scanner binary too, not just the action wrapper. No leading "v":
+          # the action builds the URL as gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz
+          # under the v-prefixed tag, so "v8.30.1" here resolves to a 404 on vv8.30.1.
+          GITLEAKS_VERSION: 8.30.1
 
   audit:
     name: pnpm audit (vulnerable dependencies)
