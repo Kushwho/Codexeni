@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "codexeni": {
+      "command": "node",
+      "args": ["dist/index.js"],
+      "env": {
+        "BRIDGE_PERMISSION_MODE": "restricted",
+        "BRIDGE_DEFAULT_HARNESS": "antigravity",
+        "BRIDGE_ALLOWED_ROOTS": ".tmp/inspector-workspace"
+      }
+    }
+  }
+}

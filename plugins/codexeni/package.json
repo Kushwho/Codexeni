@@ -12,6 +12,8 @@
     "bump": "node scripts/bump-version.mjs",
     "check:cycles": "madge --circular --extensions ts src/",
     "check:manifests": "node scripts/bump-version.mjs --check",
+    "inspect": "pnpm build && npx @modelcontextprotocol/inspector --config inspector.json --server codexeni",
+    "inspect:cli": "pnpm build && npx @modelcontextprotocol/inspector --cli --config inspector.json --server codexeni",
     "lint": "eslint src",
     "start": "node dist/index.js",
     "test": "pnpm build && node --test --test-concurrency=1 test/runtime.test.mjs test/interactive.test.mjs test/claude-code.test.mjs test/codex.test.mjs test/adapters.test.mjs test/bundle.test.mjs",
